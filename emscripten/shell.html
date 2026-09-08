@@ -23,9 +23,7 @@
     <div class="emscripten" id="status">Downloading...</div>
 
     <span id='controls'>
-      <span><input type="button" value="Fullscreen" onclick="Module.requestFullscreen(document.getElementById('pointerLock').checked,
-                                                                                document.getElementById('resize').checked)">
-      </span>
+      <span><input type="button" value="Fullscreen" onclick="render360RequestFullscreen()"></span>
     </span>
 
     <div class="emscripten">
@@ -55,6 +53,29 @@
         }
         if (statusElement) statusElement.textContent = detail;
         return detail;
+      }
+
+      function render360RequestFullscreen() {
+        try {
+          if (Module && typeof Module.requestFullscreen === 'function') {
+            // Touch-first iPhone staging: no pointer lock, resize the canvas.
+            Module.requestFullscreen(false, true);
+            return;
+          }
+          var request = canvasElement.requestFullscreen || canvasElement.webkitRequestFullscreen;
+          if (request) {
+            var result = request.call(canvasElement);
+            if (result && typeof result.catch === 'function') {
+              result.catch(function(error) {
+                render360Report('fullscreen failure', error && error.message ? error.message : String(error), error);
+              });
+            }
+            return;
+          }
+          render360Report('fullscreen unavailable', 'This Safari build does not expose element fullscreen here. The Portal canvas can still run inline.');
+        } catch (error) {
+          render360Report('fullscreen failure', error && error.message ? error.message : String(error), error);
+        }
       }
 
       // Keep the context recoverable, but expose the actual WebGL lifecycle instead
