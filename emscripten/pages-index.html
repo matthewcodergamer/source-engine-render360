@@ -53,7 +53,7 @@
 
   <section class="card">
     <strong>Runtime data</strong>
-    <p class="small">After verification, Source still reads its normal <code>chunks/&lt;map&gt;.data</code> path. Your selected Portal folder is not substituted for the runtime chunks.</p>
+    <p class="small">After verification, Source still reads its normal <code>chunks/&lt;map&gt;.data</code> path. Your selected Portal folder is not substituted for the runtime chunks. Launch stays disabled until <code>background1.data</code> is actually available, preventing the old out-of-range DataView crash on a missing/404 chunk.</p>
     <details>
       <summary>Developer fallback: local test chunks</summary>
       <p class="small">Private testing only. These <code>.data</code> files stay in this browser's cache and are not uploaded.</p>
@@ -150,12 +150,12 @@
     set('coi',coi,String(coi));set('sab',sab,sab?'available':'missing');set('wasmThreads',wasmThreads,wasmThreads?'available':'unavailable');set('offscreen',offscreen,offscreen?'available':'missing',!offscreen);set('webgl2',webgl2,webgl2?'available':'missing');set('ownership',verified,verified?'verified this session':'not verified',!verified);
     const runtimeChecks=await Promise.all([exists('./hl2_launcher.html'),exists('./hl2_launcher.js'),exists('./hl2_launcher.wasm')]),runtimeReady=runtimeChecks.every(Boolean);set('runtime',runtimeReady,runtimeReady?'launcher + JS + Wasm':'incomplete');
     const localChunk=await hasLocalBackgroundChunk();let hostedChunk=false;if(!localChunk)hostedChunk=await exists('./chunks/background1.data');const chunkReady=localChunk||hostedChunk;set('chunk',chunkReady,localChunk?'local developer cache':hostedChunk?'hosted chunks/ path':'not present',!chunkReady);
-    const threadReady=coi&&sab&&wasmThreads;$('launch').disabled=!(threadReady&&runtimeReady&&verified);
+    const threadReady=coi&&sab&&wasmThreads;$('launch').disabled=!(threadReady&&runtimeReady&&verified&&chunkReady);
     if(!verified)$('launchHint').textContent='Choose your Portal game folder to verify it locally first.';
     else if(!threadReady||!runtimeReady)$('launchHint').textContent='Portal is verified, but the Pages threading/runtime prerequisites are not ready yet.';
-    else if(chunkReady)$('launchHint').textContent='Portal verified. Source will launch using its normal chunks/ runtime data path.';
-    else $('launchHint').textContent='Portal verified and runtime is ready, but no runtime chunk source is present on this staging deployment.';
-    log('crossOriginIsolated=',coi,'SharedArrayBuffer=',sab,'WasmThreads=',wasmThreads,'OffscreenCanvas=',offscreen,'WebGL2=',webgl2,'Ownership=',verified);
+    else if(!chunkReady)$('launchHint').textContent='Portal is verified, but background1.data is not available. The previous RangeError came from trying to parse a missing/404 chunk as packed game data. Add an authorized chunks/ source or import locally generated test chunks before launch.';
+    else $('launchHint').textContent='Portal verified. Runtime data is present; Source can launch using its normal chunks/ path.';
+    log('crossOriginIsolated=',coi,'SharedArrayBuffer=',sab,'WasmThreads=',wasmThreads,'OffscreenCanvas=',offscreen,'WebGL2=',webgl2,'Ownership=',verified,'ChunkReady=',chunkReady);
   }
 
   $('ownershipFolder').addEventListener('change',event=>handleOwnershipSelection(event,'folder'));
