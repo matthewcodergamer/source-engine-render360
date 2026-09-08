@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#0b0d10">
+  <title>Render360 · Portal upstream iPhone baseline</title>
+  <style>
+    :root { color-scheme: dark; font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: #0b0d10; color: #f4f7fb; }
+    main { width: min(720px, 100%); margin: 0 auto; padding: max(24px, env(safe-area-inset-top)) 18px max(36px, env(safe-area-inset-bottom)); }
+    h1 { margin: 0 0 8px; font-size: 30px; letter-spacing: -0.035em; }
+    .sub { margin: 0 0 22px; color: #aeb8c6; line-height: 1.45; }
+    .card { background: rgba(255,255,255,.055); border: 1px solid rgba(255,255,255,.09); border-radius: 18px; padding: 16px; margin: 12px 0; backdrop-filter: blur(20px); }
+    .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 0; border-bottom: 1px solid rgba(255,255,255,.07); }
+    .row:last-child { border-bottom: 0; }
+    .name { color: #dce3ec; }
+    .value { text-align: right; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+    .ok { color: #65e28a; } .bad { color: #ff7777; } .warn { color: #ffd36d; }
+    button, .fileButton { appearance: none; border: 0; border-radius: 13px; padding: 13px 15px; background: #f4f7fb; color: #11151a; font-weight: 700; font-size: 15px; cursor: pointer; }
+    button.secondary, .fileButton.secondary { background: rgba(255,255,255,.09); color: #f4f7fb; border: 1px solid rgba(255,255,255,.09); }
+    button:disabled { opacity: .4; cursor: default; }
+    .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
+    input[type=file] { display: none; }
+    pre { white-space: pre-wrap; word-break: break-word; max-height: 260px; overflow: auto; background: #07090b; border-radius: 12px; padding: 12px; color: #c9d3df; font-size: 12px; }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .small { color: #95a1b0; font-size: 13px; line-height: 1.45; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Portal upstream baseline</h1>
+  <p class="sub">Isolated iPhone test lane for the original threaded Source/Emscripten runtime. This page does not modify the engine and does not ship Portal game content.</p>
+
+  <section class="card">
+    <div class="row"><span class="name">Secure context</span><span id="secure" class="value">checking…</span></div>
+    <div class="row"><span class="name">Service worker</span><span id="sw" class="value">checking…</span></div>
+    <div class="row"><span class="name">crossOriginIsolated</span><span id="coi" class="value">checking…</span></div>
+    <div class="row"><span class="name">SharedArrayBuffer</span><span id="sab" class="value">checking…</span></div>
+    <div class="row"><span class="name">Wasm shared memory</span><span id="wasmThreads" class="value">checking…</span></div>
+    <div class="row"><span class="name">OffscreenCanvas</span><span id="offscreen" class="value">checking…</span></div>
+    <div class="row"><span class="name">WebGL2</span><span id="webgl2" class="value">checking…</span></div>
+    <div class="row"><span class="name">Runtime files</span><span id="runtime" class="value">checking…</span></div>
+    <div class="row"><span class="name">Local background chunk</span><span id="chunk" class="value">checking…</span></div>
+  </section>
+
+  <section class="card">
+    <strong>Local Portal test data</strong>
+    <p class="small">For the full Source startup test, import <code>.data</code> chunk files generated from your own Portal installation. They are stored only in this browser's Cache Storage and are never uploaded to GitHub.</p>
+    <div class="actions">
+      <label class="fileButton secondary" for="chunkFiles">Import .data chunks</label>
+      <input id="chunkFiles" type="file" accept=".data,application/octet-stream" multiple>
+      <button id="clearChunks" class="secondary" type="button">Clear local chunks</button>
+    </div>
+    <div id="importStatus" class="small" style="margin-top:12px"></div>
+  </section>
+
+  <section class="card">
+    <strong>Run</strong>
+    <p id="launchHint" class="small">Checking whether the threaded runtime can start…</p>
+    <div class="actions">
+      <button id="launch" type="button" disabled>Launch upstream baseline</button>
+      <button id="reload" class="secondary" type="button">Reload isolation</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <strong>Device log</strong>
+    <pre id="log"></pre>
+  </section>
+</main>
+<script>
+(() => {
+  'use strict';
+
+  const CACHE_NAME = 'render360-portal-local-chunks-v1';
+  const $ = id => document.getElementById(id);
+  const logLines = [];
+  const log = (...args) => {
+    const line = args.map(x => typeof x === 'string' ? x : JSON.stringify(x)).join(' ');
+    logLines.push(line);
+    $('log').textContent = logLines.join('\n');
+    console.log('[Render360 baseline]', ...args);
+  };
+  const set = (id, ok, text, warning = false) => {
+    const el = $(id);
+    el.textContent = text;
+    el.className = 'value ' + (ok ? 'ok' : warning ? 'warn' : 'bad');
+  };
+
+  async function ensureServiceWorker() {
+    set('secure', window.isSecureContext, String(window.isSecureContext));
+    if (!('serviceWorker' in navigator)) {
+      set('sw', false, 'unsupported');
+      return;
+    }
+
+    try {
+      await navigator.serviceWorker.register('./render360-pages-sw.js', { scope: './' });
+      await navigator.serviceWorker.ready;
+      set('sw', true, navigator.serviceWorker.controller ? 'controlling' : 'registered');
+
+      if (!navigator.serviceWorker.controller) {
+        const already = sessionStorage.getItem('render360PagesReloaded');
+        if (!already) {
+          sessionStorage.setItem('render360PagesReloaded', '1');
+          log('Service worker installed; reloading once for COOP/COEP isolation.');
+          location.reload();
+          return new Promise(() => {});
+        }
+      }
+    } catch (error) {
+      set('sw', false, 'registration failed');
+      log('Service worker error:', error && error.stack ? error.stack : String(error));
+    }
+  }
+
+  function testSharedMemory() {
+    let ok = false;
+    try {
+      const memory = new WebAssembly.Memory({ initial: 1, maximum: 1, shared: true });
+      ok = !!memory.buffer && Object.prototype.toString.call(memory.buffer).includes('SharedArrayBuffer');
+    } catch (error) {
+      log('Wasm shared-memory test:', String(error));
+    }
+    return ok;
+  }
+
+  function testWebGL2() {
+    try {
+      const canvas = document.createElement('canvas');
+      const gl = canvas.getContext('webgl2', { antialias: false });
+      return !!gl;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  async function exists(path) {
+    try {
+      const response = await fetch(path, { method: 'HEAD', cache: 'no-store' });
+      return response.ok;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  async function hasLocalBackgroundChunk() {
+    if (!('caches' in window)) return false;
+    const cache = await caches.open(CACHE_NAME);
+    return !!(await cache.match(new URL('./chunks/background1.data', location.href).href));
+  }
+
+  async function refresh() {
+    const coi = window.crossOriginIsolated === true;
+    const sab = typeof SharedArrayBuffer === 'function';
+    const wasmThreads = testSharedMemory();
+    const offscreen = typeof OffscreenCanvas === 'function';
+    const webgl2 = testWebGL2();
+
+    set('coi', coi, String(coi));
+    set('sab', sab, sab ? 'available' : 'missing');
+    set('wasmThreads', wasmThreads, wasmThreads ? 'available' : 'unavailable');
+    set('offscreen', offscreen, offscreen ? 'available' : 'missing', !offscreen);
+    set('webgl2', webgl2, webgl2 ? 'available' : 'missing');
+
+    const runtimeChecks = await Promise.all([
+      exists('./hl2_launcher.html'),
+      exists('./hl2_launcher.js'),
+      exists('./hl2_launcher.wasm')
+    ]);
+    const runtimeReady = runtimeChecks.every(Boolean);
+    set('runtime', runtimeReady, runtimeReady ? 'launcher + JS + Wasm' : 'incomplete');
+
+    const localChunk = await hasLocalBackgroundChunk();
+    let networkChunk = false;
+    if (!localChunk) networkChunk = await exists('./chunks/background1.data');
+    const chunkReady = localChunk || networkChunk;
+    set('chunk', chunkReady, localChunk ? 'local cache' : networkChunk ? 'hosted' : 'not present', !chunkReady);
+
+    const threadReady = coi && sab && wasmThreads;
+    $('launch').disabled = !(threadReady && runtimeReady);
+    $('launchHint').textContent = threadReady && runtimeReady
+      ? (chunkReady
+          ? 'Threading prerequisites and game-data entry chunk are present. Launch the diagnostic runtime.'
+          : 'Threading prerequisites are ready. You can launch, but Source will stop at game-data loading until your background1.data chunk is imported.')
+      : 'Do not merge into Render360 yet. The Pages staging environment must first report crossOriginIsolated, SharedArrayBuffer, Wasm shared memory and runtime files as ready.';
+
+    log('User agent:', navigator.userAgent);
+    log('crossOriginIsolated=', coi, 'SharedArrayBuffer=', sab, 'WasmThreads=', wasmThreads, 'OffscreenCanvas=', offscreen, 'WebGL2=', webgl2);
+
+    if (navigator.storage && navigator.storage.estimate) {
+      try {
+        const estimate = await navigator.storage.estimate();
+        log('Storage estimate:', estimate);
+      } catch (_) {}
+    }
+  }
+
+  $('chunkFiles').addEventListener('change', async event => {
+    const files = Array.from(event.target.files || []);
+    if (!files.length) return;
+
+    const cache = await caches.open(CACHE_NAME);
+    let stored = 0;
+    let bytes = 0;
+    for (const file of files) {
+      const name = file.name.split('/').pop();
+      if (!/^[A-Za-z0-9_.-]+\.data$/i.test(name)) {
+        log('Skipping invalid chunk filename:', file.name);
+        continue;
+      }
+      const url = new URL('./chunks/' + name, location.href).href;
+      await cache.put(new Request(url), new Response(file, {
+        headers: { 'Content-Type': 'application/octet-stream' }
+      }));
+      stored++;
+      bytes += file.size;
+      log('Stored local chunk:', name, file.size + ' bytes');
+    }
+    $('importStatus').textContent = `Stored ${stored} chunk file(s), ${(bytes / 1048576).toFixed(1)} MiB, locally on this device.`;
+    event.target.value = '';
+    await refresh();
+  });
+
+  $('clearChunks').addEventListener('click', async () => {
+    await caches.delete(CACHE_NAME);
+    $('importStatus').textContent = 'Local Portal chunks cleared from this browser.';
+    await refresh();
+  });
+
+  $('launch').addEventListener('click', () => {
+    location.href = './hl2_launcher.html';
+  });
+
+  $('reload').addEventListener('click', () => {
+    sessionStorage.removeItem('render360PagesReloaded');
+    location.reload();
+  });
+
+  window.addEventListener('error', event => log('Page error:', event.message || event.type, event.error && event.error.stack || ''));
+  window.addEventListener('unhandledrejection', event => log('Unhandled rejection:', event.reason && event.reason.stack || String(event.reason)));
+
+  (async () => {
+    await ensureServiceWorker();
+    await refresh();
+  })();
+})();
+</script>
+</body>
+</html>
