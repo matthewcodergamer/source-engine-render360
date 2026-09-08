@@ -9,8 +9,12 @@ on:
     branches:
       - master
 
+# GitHub Pages deployment requires these permissions. Keeping them at the
+# workflow level also lets actions/configure-pages inspect the Pages site.
 permissions:
   contents: read
+  pages: write
+  id-token: write
 
 concurrency:
   group: portal-iphone-baseline-${{ github.ref }}
@@ -118,9 +122,6 @@ jobs:
     if: github.event_name != 'pull_request'
     needs: build-wasm
     runs-on: ubuntu-latest
-    permissions:
-      pages: write
-      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
