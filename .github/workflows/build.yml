@@ -121,13 +121,26 @@ jobs:
           (cd build/install && zip -9 -r "$GITHUB_WORKSPACE/Render360-Portal-iPhone-Baseline.zip" .)
           ls -lh Render360-Portal-iPhone-Baseline.zip
 
+      # Pull-request tokens can be restricted by GitHub and, in this repo,
+      # artifact finalization returns HTTP 403 even after all bytes upload.
+      # PR runs only need to prove that Source builds and the staging runtime
+      # validates. The branch push run is the deployable build, so keep the
+      # downloadable artifact and Pages publishing push/workflow_dispatch-only.
       - name: Upload runtime artifact
+        if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v7
         with:
           name: Render360-Portal-iPhone-Baseline
           path: Render360-Portal-iPhone-Baseline.zip
           if-no-files-found: error
           retention-days: 7
+
+      - name: PR validation complete
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          echo 'Portal runtime compiled and validated successfully.'
+          echo 'Artifact upload and Pages deployment are intentionally handled by the branch push run.'
 
       - name: Configure GitHub Pages
         if: github.event_name != 'pull_request'
