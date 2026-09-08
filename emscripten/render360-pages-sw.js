@@ -15,6 +15,7 @@
 const LOCAL_CHUNK_CACHE = 'render360-portal-local-chunks-v2';
 const OLD_LOCAL_CHUNK_CACHE = 'render360-portal-local-chunks-v1';
 const UPSTREAM_CHUNK_BASE = 'https://yikes.pw/portal/chunks/';
+const UPSTREAM_TIMEOUT_MS = 8000;
 
 self.addEventListener('install', event => {
   self.skipWaiting();
@@ -51,6 +52,22 @@ function withIsolationHeaders(response, extraHeaders = {}) {
   });
 }
 
+async function fetchUpstreamChunk(upstreamUrl) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort('upstream chunk timeout'), UPSTREAM_TIMEOUT_MS);
+  try {
+    return await fetch(upstreamUrl, {
+      method: 'GET',
+      mode: 'cors',
+      credentials: 'omit',
+      cache: 'no-store',
+      signal: controller.signal
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function servePortalChunk(request, url) {
   const name = url.pathname.split('/').pop();
   const cache = await caches.open(LOCAL_CHUNK_CACHE);
@@ -63,12 +80,7 @@ async function servePortalChunk(request, url) {
 
   const upstreamUrl = UPSTREAM_CHUNK_BASE + encodeURIComponent(name);
   try {
-    const upstream = await fetch(upstreamUrl, {
-      method: 'GET',
-      mode: 'cors',
-      credentials: 'omit',
-      cache: 'no-store'
-    });
+    const upstream = await fetchUpstreamChunk(upstreamUrl);
     if (!upstream.ok) throw new Error(`HTTP ${upstream.status}`);
     return withIsolationHeaders(upstream, {
       'Content-Type': upstream.headers.get('content-type') || 'application/octet-stream',
