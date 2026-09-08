@@ -113,7 +113,7 @@ class DataLoader {
 
 			resolve()
 		}
-		xhr.open('GET', `https://yikes.pw/portal/chunks/${mapName}.data`, true)
+		xhr.open('GET', `chunks/${mapName}.data`, true)
 		xhr.send()
 
 		return promise
