@@ -1,23 +1,131 @@
-name: Build
+name: Render360 Portal iPhone Baseline
 
-on: [push, pull_request]
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - render360/iphone-baseline
+  pull_request:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+concurrency:
+  group: portal-iphone-baseline-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build-wasm:
+    name: Build upstream threaded Portal runtime
     runs-on: ubuntu-latest
+    timeout-minutes: 90
 
     steps:
-    - uses: actions/checkout@v2
-      with:
-        submodules: recursive
-    - name: Build wasm
-      run: |
-        source emscripten/get_emscripten.sh
-        emmake emscripten/build.sh
-        cd build/install/
-        zip -r ../../out.zip *
-    - name: Upload artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: release.zip
-        path: out.zip
+      - name: Checkout Source fork
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Verify upstream baseline architecture
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f emscripten/build.sh
+          grep -q -- '-sSHARED_MEMORY=1' emscripten/build.sh
+          grep -q -- '-sUSE_PTHREADS' emscripten/build.sh
+          grep -q -- '-sPTHREAD_POOL_SIZE=8' emscripten/build.sh
+          grep -q -- '-sPROXY_TO_PTHREAD' emscripten/build.sh
+          grep -q -- '-sOFFSCREENCANVASES_TO_PTHREAD' emscripten/build.sh
+          grep -q -- '-sMAIN_MODULE' emscripten/build.sh
+          grep -q 'Atomics.store' emscripten/pre.js
+          grep -q 'Portal JS exception' emscripten/shell.html
+
+      - name: Install pinned upstream Emscripten environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          source emscripten/get_emscripten.sh
+          emcc -v
+          echo "EMSDK=$EMSDK" >> "$GITHUB_ENV"
+          echo "$EMSDK" > "$RUNNER_TEMP/render360-emsdk-path.txt"
+
+      - name: Build upstream release
+        shell: bash
+        run: |
+          set -euo pipefail
+          source emsdk/emsdk_env.sh
+          bash emscripten/build.sh release
+
+      - name: Validate runtime and prepare staging site
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -s build/install/hl2_launcher.html
+          test -s build/install/hl2_launcher.js
+          test -s build/install/hl2_launcher.wasm
+          grep -q 'Portal JS exception' build/install/hl2_launcher.html
+
+          # Keep public CI runtime-only. Portal retail data must be supplied
+          # locally by the tester and must never be committed to this repo.
+          if find build/install -type f -path '*/chunks/*.data' -print -quit | grep -q .; then
+            echo 'Refusing to publish bundled Portal .data chunks.' >&2
+            exit 1
+          fi
+
+          cp emscripten/pages-index.html build/install/index.html
+          cp emscripten/render360-pages-sw.js build/install/render360-pages-sw.js
+          touch build/install/.nojekyll
+
+          cat > build/install/render360-baseline.json <<JSON
+          {
+            "repository": "${GITHUB_REPOSITORY}",
+            "commit": "${GITHUB_SHA}",
+            "runtimeModel": "upstream-pthreads-shared-memory",
+            "engineArchitectureChanged": false,
+            "diagnostics": true,
+            "pagesIsolation": "service-worker-staging-only",
+            "bundledPortalRetailData": false
+          }
+          JSON
+
+          (cd build/install && zip -9 -r "$GITHUB_WORKSPACE/Render360-Portal-iPhone-Baseline.zip" .)
+          ls -lh Render360-Portal-iPhone-Baseline.zip
+
+      - name: Upload runtime artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: Render360-Portal-iPhone-Baseline
+          path: Render360-Portal-iPhone-Baseline.zip
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Configure GitHub Pages
+        if: github.event_name != 'pull_request'
+        uses: actions/configure-pages@v5
+
+      - name: Upload GitHub Pages artifact
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: build/install
+
+  deploy-pages:
+    name: Deploy iPhone staging page
+    if: github.event_name != 'pull_request'
+    needs: build-wasm
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Deploy baseline to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
