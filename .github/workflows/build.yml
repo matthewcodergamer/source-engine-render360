@@ -9,8 +9,6 @@ on:
     branches:
       - master
 
-# GitHub Pages deployment requires these permissions. Keeping them at the
-# workflow level also lets actions/configure-pages inspect the Pages site.
 permissions:
   contents: read
   pages: write
@@ -71,10 +69,13 @@ jobs:
           test -s build/install/hl2_launcher.html
           test -s build/install/hl2_launcher.js
           test -s build/install/hl2_launcher.wasm
+          test -s emscripten/portal-local-vpk.js
           grep -q 'Portal JS exception' build/install/hl2_launcher.html
+          grep -q 'chunks/${mapName}.data' emscripten/pre.js
 
-          # Keep public CI runtime-only. Portal retail data must be supplied
-          # locally by the tester and must never be committed to this repo.
+          # Public CI stays runtime-only. The browser fallback generates .data
+          # chunks from the tester's own selected Portal/VPK files and stores
+          # them only in that browser's Cache Storage.
           if find build/install -type f -path '*/chunks/*.data' -print -quit | grep -q .; then
             echo 'Refusing to publish bundled Portal .data chunks.' >&2
             exit 1
@@ -82,6 +83,7 @@ jobs:
 
           cp emscripten/pages-index.html build/install/index.html
           cp emscripten/render360-pages-sw.js build/install/render360-pages-sw.js
+          cp emscripten/portal-local-vpk.js build/install/portal-local-vpk.js
           touch build/install/.nojekyll
 
           cat > build/install/render360-baseline.json <<JSON
@@ -92,6 +94,8 @@ jobs:
             "engineArchitectureChanged": false,
             "diagnostics": true,
             "pagesIsolation": "service-worker-staging-only",
+            "runtimeChunkPath": "chunks/<map>.data",
+            "chunkSources": ["local-vpk-cache", "original-yikes-host"],
             "bundledPortalRetailData": false
           }
           JSON
@@ -122,8 +126,6 @@ jobs:
     if: github.event_name != 'pull_request'
     needs: build-wasm
     runs-on: ubuntu-latest
-    # Keep production github-pages protection intact. This separate environment
-    # is only for the isolated iPhone baseline branch.
     environment:
       name: portal-iphone-staging
       url: ${{ steps.deployment.outputs.page_url }}
