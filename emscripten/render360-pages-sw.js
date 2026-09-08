@@ -4,8 +4,10 @@
  * injects them after the first controlled reload so the upstream pthread /
  * SharedArrayBuffer runtime can be exercised on static hosting.
  *
- * It also serves user-imported Portal chunk .data files from Cache Storage.
- * Those files remain local to the browser and are never committed to GitHub.
+ * Important: the original Portal port keeps packed game chunks outside the
+ * GitHub source tree and serves them from yikes.pw. Cross-origin chunk
+ * requests are therefore passed through unchanged; only same-origin Pages
+ * responses receive the isolation headers below.
  */
 
 const LOCAL_CHUNK_CACHE = 'render360-portal-local-chunks-v1';
@@ -43,18 +45,25 @@ function withIsolationHeaders(response) {
 self.addEventListener('fetch', event => {
   const request = event.request;
 
-  // Chromium can emit this combination for devtools/cache internals. Let the
-  // browser handle it rather than throwing inside the service worker.
   if (request.cache === 'only-if-cached' && request.mode !== 'same-origin') {
     return;
   }
 
+  const url = new URL(request.url);
+  const sameOrigin = url.origin === self.location.origin;
+
+  // Preserve the original upstream response and its CORS/CORP headers. Adding
+  // a same-origin CORP header to yikes.pw here would make the browser reject
+  // the very cross-origin chunk we are trying to load.
+  if (!sameOrigin) {
+    event.respondWith(fetch(request));
+    return;
+  }
+
   event.respondWith((async () => {
-    const url = new URL(request.url);
-    const sameOrigin = url.origin === self.location.origin;
     let response = null;
 
-    if (sameOrigin && request.method === 'GET' && /\/chunks\/[^/]+\.data$/i.test(url.pathname)) {
+    if (request.method === 'GET' && /\/chunks\/[^/]+\.data$/i.test(url.pathname)) {
       const cache = await caches.open(LOCAL_CHUNK_CACHE);
       response = await cache.match(request, { ignoreSearch: true });
     }
