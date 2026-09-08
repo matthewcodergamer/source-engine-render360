@@ -6,34 +6,24 @@
   <meta name="theme-color" content="#0b0d10">
   <title>Render360 · Portal upstream iPhone baseline</title>
   <style>
-    :root { color-scheme: dark; font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif; }
-    * { box-sizing: border-box; }
-    body { margin: 0; min-height: 100vh; background: #0b0d10; color: #f4f7fb; }
-    main { width: min(720px, 100%); margin: 0 auto; padding: max(24px, env(safe-area-inset-top)) 18px max(36px, env(safe-area-inset-bottom)); }
-    h1 { margin: 0 0 8px; font-size: 30px; letter-spacing: -0.035em; }
-    .sub { margin: 0 0 22px; color: #aeb8c6; line-height: 1.45; }
-    .card { background: rgba(255,255,255,.055); border: 1px solid rgba(255,255,255,.09); border-radius: 18px; padding: 16px; margin: 12px 0; backdrop-filter: blur(20px); }
-    .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 0; border-bottom: 1px solid rgba(255,255,255,.07); }
-    .row:last-child { border-bottom: 0; }
-    .name { color: #dce3ec; }
-    .value { text-align: right; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
-    .ok { color: #65e28a; } .bad { color: #ff7777; } .warn { color: #ffd36d; }
-    button, .fileButton { appearance: none; border: 0; border-radius: 13px; padding: 13px 15px; background: #f4f7fb; color: #11151a; font-weight: 700; font-size: 15px; cursor: pointer; }
-    button.secondary, .fileButton.secondary { background: rgba(255,255,255,.09); color: #f4f7fb; border: 1px solid rgba(255,255,255,.09); }
-    button:disabled { opacity: .4; cursor: default; }
-    .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
-    input[type=file] { display: none; }
-    pre { white-space: pre-wrap; word-break: break-word; max-height: 260px; overflow: auto; background: #07090b; border-radius: 12px; padding: 12px; color: #c9d3df; font-size: 12px; }
-    code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-    .small { color: #95a1b0; font-size: 13px; line-height: 1.45; }
-    details { margin-top: 14px; }
-    summary { cursor: pointer; color: #cbd5e1; font-weight: 650; }
+    :root{color-scheme:dark;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif}
+    *{box-sizing:border-box} body{margin:0;min-height:100vh;background:#0b0d10;color:#f4f7fb}
+    main{width:min(720px,100%);margin:0 auto;padding:max(24px,env(safe-area-inset-top)) 18px max(36px,env(safe-area-inset-bottom))}
+    h1{margin:0 0 8px;font-size:30px;letter-spacing:-.035em}.sub{margin:0 0 22px;color:#aeb8c6;line-height:1.45}
+    .card{background:rgba(255,255,255,.055);border:1px solid rgba(255,255,255,.09);border-radius:18px;padding:16px;margin:12px 0;backdrop-filter:blur(20px)}
+    .row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 0;border-bottom:1px solid rgba(255,255,255,.07)}.row:last-child{border-bottom:0}
+    .name{color:#dce3ec}.value{text-align:right;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px}.ok{color:#65e28a}.bad{color:#ff7777}.warn{color:#ffd36d}
+    button,.fileButton{appearance:none;border:0;border-radius:13px;padding:13px 15px;background:#f4f7fb;color:#11151a;font-weight:700;font-size:15px;cursor:pointer}
+    button.secondary,.fileButton.secondary{background:rgba(255,255,255,.09);color:#f4f7fb;border:1px solid rgba(255,255,255,.09)}button:disabled{opacity:.4;cursor:default}
+    .actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:14px}input[type=file]{display:none}.small{color:#95a1b0;font-size:13px;line-height:1.45}
+    pre{white-space:pre-wrap;word-break:break-word;max-height:260px;overflow:auto;background:#07090b;border-radius:12px;padding:12px;color:#c9d3df;font-size:12px}
+    code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}details{margin-top:14px}summary{cursor:pointer;color:#cbd5e1;font-weight:650}
   </style>
 </head>
 <body>
 <main>
   <h1>Portal upstream baseline</h1>
-  <p class="sub">Isolated iPhone test lane for the original threaded Source/Emscripten runtime. Ownership verification and runtime game-data delivery are deliberately separate.</p>
+  <p class="sub">iPhone test lane for the original threaded Source/Emscripten runtime. Your Portal folder is used only to verify the expected game layout; runtime data remains separate.</p>
 
   <section class="card">
     <div class="row"><span class="name">Secure context</span><span id="secure" class="value">checking…</span></div>
@@ -50,9 +40,11 @@
 
   <section class="card">
     <strong>Verify your Portal copy</strong>
-    <p class="small">Choose your Portal game ZIP, or the identifying Portal files from your own installation. The browser inspects filenames locally to confirm the expected Portal layout. The selected game is not uploaded, cached, mounted, or used as the runtime filesystem.</p>
+    <p class="small">You do <b>not</b> need a ZIP. Choose the folder that contains your Portal game files. Safari inspects only filenames and relative paths locally. Nothing from this folder is uploaded, cached as game data, mounted, or used by Source.</p>
     <div class="actions">
-      <label class="fileButton" for="ownershipFiles">Choose Portal game</label>
+      <label class="fileButton" for="ownershipFolder">Choose Portal folder</label>
+      <input id="ownershipFolder" type="file" webkitdirectory directory multiple>
+      <label class="fileButton secondary" for="ownershipFiles">Files / ZIP fallback</label>
       <input id="ownershipFiles" type="file" accept=".zip,.vpk,.txt,application/zip,application/octet-stream" multiple>
       <button id="clearOwnership" class="secondary" type="button">Clear verification</button>
     </div>
@@ -61,10 +53,10 @@
 
   <section class="card">
     <strong>Runtime data</strong>
-    <p class="small">After verification, Source still reads its normal <code>chunks/&lt;map&gt;.data</code> runtime source. The uploaded Portal copy above is not substituted for those chunks.</p>
+    <p class="small">After verification, Source still reads its normal <code>chunks/&lt;map&gt;.data</code> path. Your selected Portal folder is not substituted for the runtime chunks.</p>
     <details>
       <summary>Developer fallback: local test chunks</summary>
-      <p class="small">For private testing only, you can cache <code>.data</code> chunks generated from your own Portal installation. They stay on this device and are never uploaded to GitHub.</p>
+      <p class="small">Private testing only. These <code>.data</code> files stay in this browser's cache and are not uploaded.</p>
       <div class="actions">
         <label class="fileButton secondary" for="chunkFiles">Import local .data chunks</label>
         <input id="chunkFiles" type="file" accept=".data,application/octet-stream" multiple>
@@ -83,266 +75,97 @@
     </div>
   </section>
 
-  <section class="card">
-    <strong>Device log</strong>
-    <pre id="log"></pre>
-  </section>
+  <section class="card"><strong>Device log</strong><pre id="log"></pre></section>
 </main>
 <script>
 (() => {
   'use strict';
+  const CACHE_NAME='render360-portal-local-chunks-v1';
+  const OWNERSHIP_KEY='render360PortalOwnershipVerified';
+  const $=id=>document.getElementById(id);
+  const logLines=[];
+  const log=(...args)=>{const line=args.map(x=>typeof x==='string'?x:JSON.stringify(x)).join(' ');logLines.push(line);$('log').textContent=logLines.join('\n');console.log('[Render360 baseline]',...args)};
+  const set=(id,ok,text,warning=false)=>{const el=$(id);el.textContent=text;el.className='value '+(ok?'ok':warning?'warn':'bad')};
 
-  const CACHE_NAME = 'render360-portal-local-chunks-v1';
-  const OWNERSHIP_KEY = 'render360PortalOwnershipVerified';
-  const $ = id => document.getElementById(id);
-  const logLines = [];
-  const log = (...args) => {
-    const line = args.map(x => typeof x === 'string' ? x : JSON.stringify(x)).join(' ');
-    logLines.push(line);
-    $('log').textContent = logLines.join('\n');
-    console.log('[Render360 baseline]', ...args);
-  };
-  const set = (id, ok, text, warning = false) => {
-    const el = $(id);
-    el.textContent = text;
-    el.className = 'value ' + (ok ? 'ok' : warning ? 'warn' : 'bad');
-  };
+  async function ensureServiceWorker(){
+    set('secure',window.isSecureContext,String(window.isSecureContext));
+    if(!('serviceWorker'in navigator)){set('sw',false,'unsupported');return}
+    try{
+      await navigator.serviceWorker.register('./render360-pages-sw.js',{scope:'./'});await navigator.serviceWorker.ready;
+      set('sw',true,navigator.serviceWorker.controller?'controlling':'registered');
+      if(!navigator.serviceWorker.controller&&!sessionStorage.getItem('render360PagesReloaded')){sessionStorage.setItem('render360PagesReloaded','1');log('Service worker installed; reloading once for isolation.');location.reload();return new Promise(()=>{})}
+    }catch(error){set('sw',false,'registration failed');log('Service worker error:',error?.stack||String(error))}
+  }
+  function testSharedMemory(){try{const memory=new WebAssembly.Memory({initial:1,maximum:1,shared:true});return !!memory.buffer&&Object.prototype.toString.call(memory.buffer).includes('SharedArrayBuffer')}catch(error){log('Wasm shared-memory test:',String(error));return false}}
+  function testWebGL2(){try{return !!document.createElement('canvas').getContext('webgl2',{antialias:false})}catch(_){return false}}
+  async function exists(path){try{const response=await fetch(path,{method:'HEAD',cache:'no-store'});return response.ok}catch(_){return false}}
+  function ownershipVerified(){return sessionStorage.getItem(OWNERSHIP_KEY)==='1'}
+  function normalizePath(name){return String(name||'').replace(/\\/g,'/').toLowerCase()}
 
-  async function ensureServiceWorker() {
-    set('secure', window.isSecureContext, String(window.isSecureContext));
-    if (!('serviceWorker' in navigator)) {
-      set('sw', false, 'unsupported');
-      return;
-    }
-    try {
-      await navigator.serviceWorker.register('./render360-pages-sw.js', { scope: './' });
-      await navigator.serviceWorker.ready;
-      set('sw', true, navigator.serviceWorker.controller ? 'controlling' : 'registered');
-      if (!navigator.serviceWorker.controller) {
-        const already = sessionStorage.getItem('render360PagesReloaded');
-        if (!already) {
-          sessionStorage.setItem('render360PagesReloaded', '1');
-          log('Service worker installed; reloading once for COOP/COEP isolation.');
-          location.reload();
-          return new Promise(() => {});
-        }
-      }
-    } catch (error) {
-      set('sw', false, 'registration failed');
-      log('Service worker error:', error && error.stack ? error.stack : String(error));
-    }
+  function looksLikePortalLayout(names){
+    const normalized=names.map(normalizePath);
+    const hasGameInfo=normalized.some(x=>x.endsWith('/portal/gameinfo.txt')||x==='portal/gameinfo.txt'||x==='gameinfo.txt');
+    const hasPortalDir=normalized.some(x=>/(^|\/)portal(\/|$)/.test(x));
+    const hasPortalVpk=normalized.some(x=>/(^|\/)portal\/[^/]*_dir\.vpk$/.test(x)||/(^|\/)portal_pak_dir\.vpk$/.test(x));
+    const hasHl2Dir=normalized.some(x=>/(^|\/)hl2(\/|$)/.test(x));
+    const hasHl2Vpk=normalized.some(x=>/(^|\/)hl2\/[^/]*_dir\.vpk$/.test(x)||/(^|\/)hl2_[^/]*_dir\.vpk$/.test(x));
+    const ok=hasGameInfo&&(hasPortalVpk||hasPortalDir);
+    return{ok,hasGameInfo,hasPortalDir,hasPortalVpk,hasHl2Dir,hasHl2Vpk,fileCount:normalized.length};
   }
 
-  function testSharedMemory() {
-    try {
-      const memory = new WebAssembly.Memory({ initial: 1, maximum: 1, shared: true });
-      return !!memory.buffer && Object.prototype.toString.call(memory.buffer).includes('SharedArrayBuffer');
-    } catch (error) {
-      log('Wasm shared-memory test:', String(error));
-      return false;
-    }
-  }
-
-  function testWebGL2() {
-    try {
-      const canvas = document.createElement('canvas');
-      return !!canvas.getContext('webgl2', { antialias: false });
-    } catch (_) {
-      return false;
-    }
-  }
-
-  async function exists(path) {
-    try {
-      const response = await fetch(path, { method: 'HEAD', cache: 'no-store' });
-      return response.ok;
-    } catch (_) {
-      return false;
-    }
-  }
-
-  function ownershipVerified() {
-    return sessionStorage.getItem(OWNERSHIP_KEY) === '1';
-  }
-
-  function normalizePath(name) {
-    return String(name || '').replace(/\\/g, '/').toLowerCase();
-  }
-
-  function looksLikePortalLayout(names) {
-    const normalized = names.map(normalizePath);
-    const hasGameInfo = normalized.some(x => x.endsWith('/portal/gameinfo.txt') || x === 'portal/gameinfo.txt' || x === 'gameinfo.txt');
-    const hasPortalVpk = normalized.some(x => /(^|\/)portal\/[^/]*_dir\.vpk$/.test(x) || /(^|\/)portal_pak_dir\.vpk$/.test(x));
-    const hasHl2Vpk = normalized.some(x => /(^|\/)hl2\/[^/]*_dir\.vpk$/.test(x) || /(^|\/)hl2_[^/]*_dir\.vpk$/.test(x));
-    return { ok: hasGameInfo && hasPortalVpk, hasGameInfo, hasPortalVpk, hasHl2Vpk };
-  }
-
-  async function zipEntryNames(file) {
-    const tailSize = Math.min(file.size, 131072);
-    const tailOffset = file.size - tailSize;
-    const tail = new Uint8Array(await file.slice(tailOffset).arrayBuffer());
-    let eocd = -1;
-    for (let i = tail.length - 22; i >= 0; i--) {
-      if (tail[i] === 0x50 && tail[i + 1] === 0x4b && tail[i + 2] === 0x05 && tail[i + 3] === 0x06) { eocd = i; break; }
-    }
-    if (eocd < 0) throw new Error('ZIP directory footer not found');
-    const view = new DataView(tail.buffer, tail.byteOffset, tail.byteLength);
-    const entries = view.getUint16(eocd + 10, true);
-    const cdSize = view.getUint32(eocd + 12, true);
-    const cdOffset = view.getUint32(eocd + 16, true);
-    if (entries === 0xffff || cdSize === 0xffffffff || cdOffset === 0xffffffff) throw new Error('ZIP64 verification is not supported by this lightweight checker');
-    const cd = new Uint8Array(await file.slice(cdOffset, cdOffset + cdSize).arrayBuffer());
-    const dv = new DataView(cd.buffer, cd.byteOffset, cd.byteLength);
-    const decoder = new TextDecoder();
-    const names = [];
-    let p = 0;
-    for (let n = 0; n < entries && p + 46 <= cd.length; n++) {
-      if (dv.getUint32(p, true) !== 0x02014b50) break;
-      const nameLen = dv.getUint16(p + 28, true);
-      const extraLen = dv.getUint16(p + 30, true);
-      const commentLen = dv.getUint16(p + 32, true);
-      names.push(decoder.decode(cd.subarray(p + 46, p + 46 + nameLen)));
-      p += 46 + nameLen + extraLen + commentLen;
-    }
+  async function zipEntryNames(file){
+    const tailSize=Math.min(file.size,131072),tailOffset=file.size-tailSize,tail=new Uint8Array(await file.slice(tailOffset).arrayBuffer());let eocd=-1;
+    for(let i=tail.length-22;i>=0;i--){if(tail[i]===0x50&&tail[i+1]===0x4b&&tail[i+2]===0x05&&tail[i+3]===0x06){eocd=i;break}}
+    if(eocd<0)throw new Error('ZIP directory footer not found');
+    const view=new DataView(tail.buffer,tail.byteOffset,tail.byteLength),entries=view.getUint16(eocd+10,true),cdSize=view.getUint32(eocd+12,true),cdOffset=view.getUint32(eocd+16,true);
+    if(entries===0xffff||cdSize===0xffffffff||cdOffset===0xffffffff)throw new Error('ZIP64 verification is not supported by this lightweight checker');
+    const cd=new Uint8Array(await file.slice(cdOffset,cdOffset+cdSize).arrayBuffer()),dv=new DataView(cd.buffer,cd.byteOffset,cd.byteLength),decoder=new TextDecoder(),names=[];let p=0;
+    for(let n=0;n<entries&&p+46<=cd.length;n++){if(dv.getUint32(p,true)!==0x02014b50)break;const nameLen=dv.getUint16(p+28,true),extraLen=dv.getUint16(p+30,true),commentLen=dv.getUint16(p+32,true);names.push(decoder.decode(cd.subarray(p+46,p+46+nameLen)));p+=46+nameLen+extraLen+commentLen}
     return names;
   }
 
-  async function verifySelectedPortalFiles(files) {
-    const names = [];
-    for (const file of files) {
-      if (/\.zip$/i.test(file.name)) {
-        const zipNames = await zipEntryNames(file);
-        names.push(...zipNames);
-        log('Inspected Portal ZIP locally:', file.name, zipNames.length + ' entries');
-      } else {
-        names.push(file.webkitRelativePath || file.name);
-      }
+  async function verifySelectedPortalFiles(files){
+    const names=[];
+    for(const file of files){
+      if(/\.zip$/i.test(file.name)){const zipNames=await zipEntryNames(file);names.push(...zipNames);log('Inspected Portal ZIP locally:',file.name,zipNames.length+' entries')}
+      else names.push(file.webkitRelativePath||file.name);
     }
     return looksLikePortalLayout(names);
   }
 
-  async function hasLocalBackgroundChunk() {
-    if (!('caches' in window)) return false;
-    const cache = await caches.open(CACHE_NAME);
-    return !!(await cache.match(new URL('./chunks/background1.data', location.href).href));
+  async function handleOwnershipSelection(event,kind){
+    const files=Array.from(event.target.files||[]);if(!files.length)return;
+    try{
+      log('Inspecting Portal '+kind+' locally:',files.length+' files');
+      const result=await verifySelectedPortalFiles(files);
+      if(result.ok){sessionStorage.setItem(OWNERSHIP_KEY,'1');$('ownershipStatus').textContent=`Portal ${kind} verified locally (${result.fileCount} entries inspected). Nothing was uploaded or mounted.`;log('Ownership check passed:',result)}
+      else{sessionStorage.removeItem(OWNERSHIP_KEY);$('ownershipStatus').textContent='Could not verify the Portal layout. Choose the game folder that contains the portal folder and portal/gameinfo.txt. If you selected only one subfolder, go up one level and choose the full Portal game folder.';log('Ownership check failed:',result)}
+    }catch(error){sessionStorage.removeItem(OWNERSHIP_KEY);$('ownershipStatus').textContent='Could not inspect that selection locally: '+String(error.message||error);log('Ownership verifier error:',error?.stack||String(error))}
+    event.target.value='';await refresh();
   }
 
-  async function refresh() {
-    const coi = window.crossOriginIsolated === true;
-    const sab = typeof SharedArrayBuffer === 'function';
-    const wasmThreads = testSharedMemory();
-    const offscreen = typeof OffscreenCanvas === 'function';
-    const webgl2 = testWebGL2();
-    const verified = ownershipVerified();
-
-    set('coi', coi, String(coi));
-    set('sab', sab, sab ? 'available' : 'missing');
-    set('wasmThreads', wasmThreads, wasmThreads ? 'available' : 'unavailable');
-    set('offscreen', offscreen, offscreen ? 'available' : 'missing', !offscreen);
-    set('webgl2', webgl2, webgl2 ? 'available' : 'missing');
-    set('ownership', verified, verified ? 'verified this session' : 'not verified', !verified);
-
-    const runtimeChecks = await Promise.all([
-      exists('./hl2_launcher.html'),
-      exists('./hl2_launcher.js'),
-      exists('./hl2_launcher.wasm')
-    ]);
-    const runtimeReady = runtimeChecks.every(Boolean);
-    set('runtime', runtimeReady, runtimeReady ? 'launcher + JS + Wasm' : 'incomplete');
-
-    const localChunk = await hasLocalBackgroundChunk();
-    let hostedChunk = false;
-    if (!localChunk) hostedChunk = await exists('./chunks/background1.data');
-    const chunkReady = localChunk || hostedChunk;
-    set('chunk', chunkReady, localChunk ? 'local developer cache' : hostedChunk ? 'hosted chunks/ path' : 'not present', !chunkReady);
-
-    const threadReady = coi && sab && wasmThreads;
-    $('launch').disabled = !(threadReady && runtimeReady && verified);
-    if (!verified) {
-      $('launchHint').textContent = 'Verify your Portal copy locally first. The selected game is used only for this check and is not mounted into Source.';
-    } else if (!threadReady || !runtimeReady) {
-      $('launchHint').textContent = 'Ownership is verified, but the Pages threading/runtime prerequisites are not ready yet.';
-    } else if (chunkReady) {
-      $('launchHint').textContent = 'Ownership verified. Source will launch using its normal chunks/ runtime data path.';
-    } else {
-      $('launchHint').textContent = 'Ownership verified and runtime is ready, but no runtime chunk source is present on this staging deployment.';
-    }
-
-    log('User agent:', navigator.userAgent);
-    log('crossOriginIsolated=', coi, 'SharedArrayBuffer=', sab, 'WasmThreads=', wasmThreads, 'OffscreenCanvas=', offscreen, 'WebGL2=', webgl2, 'Ownership=', verified);
+  async function hasLocalBackgroundChunk(){if(!('caches'in window))return false;const cache=await caches.open(CACHE_NAME);return !!(await cache.match(new URL('./chunks/background1.data',location.href).href))}
+  async function refresh(){
+    const coi=window.crossOriginIsolated===true,sab=typeof SharedArrayBuffer==='function',wasmThreads=testSharedMemory(),offscreen=typeof OffscreenCanvas==='function',webgl2=testWebGL2(),verified=ownershipVerified();
+    set('coi',coi,String(coi));set('sab',sab,sab?'available':'missing');set('wasmThreads',wasmThreads,wasmThreads?'available':'unavailable');set('offscreen',offscreen,offscreen?'available':'missing',!offscreen);set('webgl2',webgl2,webgl2?'available':'missing');set('ownership',verified,verified?'verified this session':'not verified',!verified);
+    const runtimeChecks=await Promise.all([exists('./hl2_launcher.html'),exists('./hl2_launcher.js'),exists('./hl2_launcher.wasm')]),runtimeReady=runtimeChecks.every(Boolean);set('runtime',runtimeReady,runtimeReady?'launcher + JS + Wasm':'incomplete');
+    const localChunk=await hasLocalBackgroundChunk();let hostedChunk=false;if(!localChunk)hostedChunk=await exists('./chunks/background1.data');const chunkReady=localChunk||hostedChunk;set('chunk',chunkReady,localChunk?'local developer cache':hostedChunk?'hosted chunks/ path':'not present',!chunkReady);
+    const threadReady=coi&&sab&&wasmThreads;$('launch').disabled=!(threadReady&&runtimeReady&&verified);
+    if(!verified)$('launchHint').textContent='Choose your Portal game folder to verify it locally first.';
+    else if(!threadReady||!runtimeReady)$('launchHint').textContent='Portal is verified, but the Pages threading/runtime prerequisites are not ready yet.';
+    else if(chunkReady)$('launchHint').textContent='Portal verified. Source will launch using its normal chunks/ runtime data path.';
+    else $('launchHint').textContent='Portal verified and runtime is ready, but no runtime chunk source is present on this staging deployment.';
+    log('crossOriginIsolated=',coi,'SharedArrayBuffer=',sab,'WasmThreads=',wasmThreads,'OffscreenCanvas=',offscreen,'WebGL2=',webgl2,'Ownership=',verified);
   }
 
-  $('ownershipFiles').addEventListener('change', async event => {
-    const files = Array.from(event.target.files || []);
-    if (!files.length) return;
-    try {
-      const result = await verifySelectedPortalFiles(files);
-      if (result.ok) {
-        sessionStorage.setItem(OWNERSHIP_KEY, '1');
-        $('ownershipStatus').textContent = 'Portal layout verified locally. No selected game data was uploaded, cached, or mounted.';
-        log('Ownership check passed:', result);
-      } else {
-        sessionStorage.removeItem(OWNERSHIP_KEY);
-        $('ownershipStatus').textContent = 'Could not verify the expected Portal layout. Select a Portal ZIP containing portal/gameinfo.txt and Portal VPK directory metadata, or select those identifying files directly.';
-        log('Ownership check failed:', result);
-      }
-    } catch (error) {
-      sessionStorage.removeItem(OWNERSHIP_KEY);
-      $('ownershipStatus').textContent = 'Could not inspect that file locally: ' + String(error.message || error);
-      log('Ownership verifier error:', error && error.stack ? error.stack : String(error));
-    }
-    event.target.value = '';
-    await refresh();
-  });
-
-  $('clearOwnership').addEventListener('click', async () => {
-    sessionStorage.removeItem(OWNERSHIP_KEY);
-    $('ownershipStatus').textContent = 'Verification cleared.';
-    await refresh();
-  });
-
-  $('chunkFiles').addEventListener('change', async event => {
-    const files = Array.from(event.target.files || []);
-    if (!files.length) return;
-    const cache = await caches.open(CACHE_NAME);
-    let stored = 0;
-    let bytes = 0;
-    for (const file of files) {
-      const name = file.name.split('/').pop();
-      if (!/^[A-Za-z0-9_.-]+\.data$/i.test(name)) {
-        log('Skipping invalid chunk filename:', file.name);
-        continue;
-      }
-      const url = new URL('./chunks/' + name, location.href).href;
-      await cache.put(new Request(url), new Response(file, { headers: { 'Content-Type': 'application/octet-stream' } }));
-      stored++;
-      bytes += file.size;
-      log('Stored local developer chunk:', name, file.size + ' bytes');
-    }
-    $('importStatus').textContent = `Stored ${stored} local test chunk file(s), ${(bytes / 1048576).toFixed(1)} MiB, on this device.`;
-    event.target.value = '';
-    await refresh();
-  });
-
-  $('clearChunks').addEventListener('click', async () => {
-    await caches.delete(CACHE_NAME);
-    $('importStatus').textContent = 'Local developer chunks cleared from this browser.';
-    await refresh();
-  });
-
-  $('launch').addEventListener('click', () => { location.href = './hl2_launcher.html'; });
-  $('reload').addEventListener('click', () => {
-    sessionStorage.removeItem('render360PagesReloaded');
-    location.reload();
-  });
-
-  window.addEventListener('error', event => log('Page error:', event.message || event.type, event.error && event.error.stack || ''));
-  window.addEventListener('unhandledrejection', event => log('Unhandled rejection:', event.reason && event.reason.stack || String(event.reason)));
-
-  (async () => {
-    await ensureServiceWorker();
-    await refresh();
-  })();
+  $('ownershipFolder').addEventListener('change',event=>handleOwnershipSelection(event,'folder'));
+  $('ownershipFiles').addEventListener('change',event=>handleOwnershipSelection(event,'files'));
+  $('clearOwnership').addEventListener('click',async()=>{sessionStorage.removeItem(OWNERSHIP_KEY);$('ownershipStatus').textContent='Verification cleared.';await refresh()});
+  $('chunkFiles').addEventListener('change',async event=>{const files=Array.from(event.target.files||[]);if(!files.length)return;const cache=await caches.open(CACHE_NAME);let stored=0,bytes=0;for(const file of files){const name=file.name.split('/').pop();if(!/^[A-Za-z0-9_.-]+\.data$/i.test(name)){log('Skipping invalid chunk filename:',file.name);continue}const url=new URL('./chunks/'+name,location.href).href;await cache.put(new Request(url),new Response(file,{headers:{'Content-Type':'application/octet-stream'}}));stored++;bytes+=file.size} $('importStatus').textContent=`Stored ${stored} local test chunk file(s), ${(bytes/1048576).toFixed(1)} MiB, on this device.`;event.target.value='';await refresh()});
+  $('clearChunks').addEventListener('click',async()=>{await caches.delete(CACHE_NAME);$('importStatus').textContent='Local developer chunks cleared.';await refresh()});
+  $('launch').addEventListener('click',()=>{location.href='./hl2_launcher.html'});$('reload').addEventListener('click',()=>{sessionStorage.removeItem('render360PagesReloaded');location.reload()});
+  window.addEventListener('error',event=>log('Page error:',event.message||event.type,event.error?.stack||''));window.addEventListener('unhandledrejection',event=>log('Unhandled rejection:',event.reason?.stack||String(event.reason)));
+  (async()=>{await ensureServiceWorker();await refresh()})();
 })();
 </script>
 </body>
