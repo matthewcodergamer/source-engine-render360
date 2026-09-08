@@ -7,7 +7,7 @@
   <title>Render360 · Portal upstream iPhone baseline</title>
   <style>
     :root{color-scheme:dark;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif}
-    *{box-sizing:border-box} body{margin:0;min-height:100vh;background:#0b0d10;color:#f4f7fb}
+    *{box-sizing:border-box}body{margin:0;min-height:100vh;background:#0b0d10;color:#f4f7fb}
     main{width:min(720px,100%);margin:0 auto;padding:max(24px,env(safe-area-inset-top)) 18px max(36px,env(safe-area-inset-bottom))}
     h1{margin:0 0 8px;font-size:30px;letter-spacing:-.035em}.sub{margin:0 0 22px;color:#aeb8c6;line-height:1.45}
     .card{background:rgba(255,255,255,.055);border:1px solid rgba(255,255,255,.09);border-radius:18px;padding:16px;margin:12px 0;backdrop-filter:blur(20px)}
@@ -17,13 +17,13 @@
     button.secondary,.fileButton.secondary{background:rgba(255,255,255,.09);color:#f4f7fb;border:1px solid rgba(255,255,255,.09)}button:disabled{opacity:.4;cursor:default}
     .actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:14px}input[type=file]{display:none}.small{color:#95a1b0;font-size:13px;line-height:1.45}
     pre{white-space:pre-wrap;word-break:break-word;max-height:260px;overflow:auto;background:#07090b;border-radius:12px;padding:12px;color:#c9d3df;font-size:12px}
-    code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}details{margin-top:14px}summary{cursor:pointer;color:#cbd5e1;font-weight:650}
+    code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
   </style>
 </head>
 <body>
 <main>
   <h1>Portal upstream baseline</h1>
-  <p class="sub">iPhone test lane for the original threaded Source/Emscripten runtime. Your Portal folder is used only to verify the expected game layout; runtime data remains separate.</p>
+  <p class="sub">Exact upstream Source/Emscripten runtime test. Your Portal installation is checked locally first; after verification the runtime uses the original port's packed map data source.</p>
 
   <section class="card">
     <div class="row"><span class="name">Secure context</span><span id="secure" class="value">checking…</span></div>
@@ -35,12 +35,12 @@
     <div class="row"><span class="name">WebGL2</span><span id="webgl2" class="value">checking…</span></div>
     <div class="row"><span class="name">Runtime files</span><span id="runtime" class="value">checking…</span></div>
     <div class="row"><span class="name">Portal ownership proof</span><span id="ownership" class="value">not verified</span></div>
-    <div class="row"><span class="name">Runtime chunk source</span><span id="chunk" class="value">checking…</span></div>
+    <div class="row"><span class="name">Original chunk source</span><span id="chunk" class="value">checking…</span></div>
   </section>
 
   <section class="card">
     <strong>Verify your Portal copy</strong>
-    <p class="small">You do <b>not</b> need a ZIP. Choose the folder that contains your Portal game files. Safari inspects only filenames and relative paths locally. Nothing from this folder is uploaded, cached as game data, mounted, or used by Source.</p>
+    <p class="small">Choose the Portal game folder you showed earlier — the one containing <code>portal/</code>, <code>hl2/</code>, <code>platform/</code> and the game executables. Safari only inspects filenames and folder paths. The game folder is not uploaded or mounted.</p>
     <div class="actions">
       <label class="fileButton" for="ownershipFolder">Choose Portal folder</label>
       <input id="ownershipFolder" type="file" webkitdirectory directory multiple>
@@ -52,23 +52,15 @@
   </section>
 
   <section class="card">
-    <strong>Runtime data</strong>
-    <p class="small">After verification, Source still reads its normal <code>chunks/&lt;map&gt;.data</code> path. Your selected Portal folder is not substituted for the runtime chunks. Launch stays disabled until <code>background1.data</code> is actually available, preventing the old out-of-range DataView crash on a missing/404 chunk.</p>
-    <details>
-      <summary>Developer fallback: local test chunks</summary>
-      <p class="small">Private testing only. These <code>.data</code> files stay in this browser's cache and are not uploaded.</p>
-      <div class="actions">
-        <label class="fileButton secondary" for="chunkFiles">Import local .data chunks</label>
-        <input id="chunkFiles" type="file" accept=".data,application/octet-stream" multiple>
-        <button id="clearChunks" class="secondary" type="button">Clear local chunks</button>
-      </div>
-      <div id="importStatus" class="small" style="margin-top:12px"></div>
-    </details>
+    <strong>Original packed Portal data</strong>
+    <p class="small">The upstream GitHub repository does not contain a <code>chunks/</code> directory. Its own README tells the web build to obtain <code>mapName.data</code> from <code>yikes.pw/portal/chunks/</code>. This staging build now uses that same original source instead of inventing a replacement format.</p>
+    <div class="row"><span class="name">Base URL</span><span class="value">yikes.pw/portal/chunks/</span></div>
+    <div class="actions"><button id="retryChunk" class="secondary" type="button">Retry chunk check</button></div>
   </section>
 
   <section class="card">
     <strong>Run</strong>
-    <p id="launchHint" class="small">Checking whether the threaded runtime can start…</p>
+    <p id="launchHint" class="small">Checking whether the original threaded runtime can start…</p>
     <div class="actions">
       <button id="launch" type="button" disabled>Launch upstream baseline</button>
       <button id="reload" class="secondary" type="button">Reload isolation</button>
@@ -80,8 +72,8 @@
 <script>
 (() => {
   'use strict';
-  const CACHE_NAME='render360-portal-local-chunks-v1';
   const OWNERSHIP_KEY='render360PortalOwnershipVerified';
+  const UPSTREAM_CHUNK_BASE='https://yikes.pw/portal/chunks/';
   const $=id=>document.getElementById(id);
   const logLines=[];
   const log=(...args)=>{const line=args.map(x=>typeof x==='string'?x:JSON.stringify(x)).join(' ');logLines.push(line);$('log').textContent=logLines.join('\n');console.log('[Render360 baseline]',...args)};
@@ -91,12 +83,22 @@
     set('secure',window.isSecureContext,String(window.isSecureContext));
     if(!('serviceWorker'in navigator)){set('sw',false,'unsupported');return}
     try{
-      await navigator.serviceWorker.register('./render360-pages-sw.js',{scope:'./'});await navigator.serviceWorker.ready;
+      await navigator.serviceWorker.register('./render360-pages-sw.js',{scope:'./'});
+      await navigator.serviceWorker.ready;
       set('sw',true,navigator.serviceWorker.controller?'controlling':'registered');
-      if(!navigator.serviceWorker.controller&&!sessionStorage.getItem('render360PagesReloaded')){sessionStorage.setItem('render360PagesReloaded','1');log('Service worker installed; reloading once for isolation.');location.reload();return new Promise(()=>{})}
+      if(!navigator.serviceWorker.controller&&!sessionStorage.getItem('render360PagesReloaded')){
+        sessionStorage.setItem('render360PagesReloaded','1');
+        log('Service worker installed; reloading once for isolation.');
+        location.reload();
+        return new Promise(()=>{});
+      }
     }catch(error){set('sw',false,'registration failed');log('Service worker error:',error?.stack||String(error))}
   }
-  function testSharedMemory(){try{const memory=new WebAssembly.Memory({initial:1,maximum:1,shared:true});return !!memory.buffer&&Object.prototype.toString.call(memory.buffer).includes('SharedArrayBuffer')}catch(error){log('Wasm shared-memory test:',String(error));return false}}
+
+  function testSharedMemory(){
+    try{const memory=new WebAssembly.Memory({initial:1,maximum:1,shared:true});return !!memory.buffer&&Object.prototype.toString.call(memory.buffer).includes('SharedArrayBuffer')}
+    catch(error){log('Wasm shared-memory test:',String(error));return false}
+  }
   function testWebGL2(){try{return !!document.createElement('canvas').getContext('webgl2',{antialias:false})}catch(_){return false}}
   async function exists(path){try{const response=await fetch(path,{method:'HEAD',cache:'no-store'});return response.ok}catch(_){return false}}
   function ownershipVerified(){return sessionStorage.getItem(OWNERSHIP_KEY)==='1'}
@@ -120,7 +122,12 @@
     const view=new DataView(tail.buffer,tail.byteOffset,tail.byteLength),entries=view.getUint16(eocd+10,true),cdSize=view.getUint32(eocd+12,true),cdOffset=view.getUint32(eocd+16,true);
     if(entries===0xffff||cdSize===0xffffffff||cdOffset===0xffffffff)throw new Error('ZIP64 verification is not supported by this lightweight checker');
     const cd=new Uint8Array(await file.slice(cdOffset,cdOffset+cdSize).arrayBuffer()),dv=new DataView(cd.buffer,cd.byteOffset,cd.byteLength),decoder=new TextDecoder(),names=[];let p=0;
-    for(let n=0;n<entries&&p+46<=cd.length;n++){if(dv.getUint32(p,true)!==0x02014b50)break;const nameLen=dv.getUint16(p+28,true),extraLen=dv.getUint16(p+30,true),commentLen=dv.getUint16(p+32,true);names.push(decoder.decode(cd.subarray(p+46,p+46+nameLen)));p+=46+nameLen+extraLen+commentLen}
+    for(let n=0;n<entries&&p+46<=cd.length;n++){
+      if(dv.getUint32(p,true)!==0x02014b50)break;
+      const nameLen=dv.getUint16(p+28,true),extraLen=dv.getUint16(p+30,true),commentLen=dv.getUint16(p+32,true);
+      names.push(decoder.decode(cd.subarray(p+46,p+46+nameLen)));
+      p+=46+nameLen+extraLen+commentLen;
+    }
     return names;
   }
 
@@ -138,33 +145,82 @@
     try{
       log('Inspecting Portal '+kind+' locally:',files.length+' files');
       const result=await verifySelectedPortalFiles(files);
-      if(result.ok){sessionStorage.setItem(OWNERSHIP_KEY,'1');$('ownershipStatus').textContent=`Portal ${kind} verified locally (${result.fileCount} entries inspected). Nothing was uploaded or mounted.`;log('Ownership check passed:',result)}
-      else{sessionStorage.removeItem(OWNERSHIP_KEY);$('ownershipStatus').textContent='Could not verify the Portal layout. Choose the game folder that contains the portal folder and portal/gameinfo.txt. If you selected only one subfolder, go up one level and choose the full Portal game folder.';log('Ownership check failed:',result)}
-    }catch(error){sessionStorage.removeItem(OWNERSHIP_KEY);$('ownershipStatus').textContent='Could not inspect that selection locally: '+String(error.message||error);log('Ownership verifier error:',error?.stack||String(error))}
-    event.target.value='';await refresh();
+      if(result.ok){
+        sessionStorage.setItem(OWNERSHIP_KEY,'1');
+        $('ownershipStatus').textContent=`Portal ${kind} verified locally (${result.fileCount} entries inspected).`;
+        log('Ownership check passed:',result);
+      }else{
+        sessionStorage.removeItem(OWNERSHIP_KEY);
+        $('ownershipStatus').textContent='Could not verify the Portal layout. Select the full folder that contains portal/ and portal/gameinfo.txt.';
+        log('Ownership check failed:',result);
+      }
+    }catch(error){
+      sessionStorage.removeItem(OWNERSHIP_KEY);
+      $('ownershipStatus').textContent='Could not inspect that selection locally: '+String(error.message||error);
+      log('Ownership verifier error:',error?.stack||String(error));
+    }
+    event.target.value='';
+    await refresh();
   }
 
-  async function hasLocalBackgroundChunk(){if(!('caches'in window))return false;const cache=await caches.open(CACHE_NAME);return !!(await cache.match(new URL('./chunks/background1.data',location.href).href))}
+  async function probeOriginalChunk(){
+    const url=UPSTREAM_CHUNK_BASE+'background1.data';
+    try{
+      const response=await fetch(url,{method:'GET',mode:'cors',cache:'no-store'});
+      const result={ok:response.ok,status:response.status,type:response.headers.get('content-type')||'',url};
+      if(response.body&&response.body.cancel)response.body.cancel().catch(()=>{});
+      log('Original chunk probe:',result);
+      return result;
+    }catch(error){
+      const result={ok:false,error:String(error?.message||error),url};
+      log('Original chunk probe failed:',result);
+      return result;
+    }
+  }
+
   async function refresh(){
-    const coi=window.crossOriginIsolated===true,sab=typeof SharedArrayBuffer==='function',wasmThreads=testSharedMemory(),offscreen=typeof OffscreenCanvas==='function',webgl2=testWebGL2(),verified=ownershipVerified();
-    set('coi',coi,String(coi));set('sab',sab,sab?'available':'missing');set('wasmThreads',wasmThreads,wasmThreads?'available':'unavailable');set('offscreen',offscreen,offscreen?'available':'missing',!offscreen);set('webgl2',webgl2,webgl2?'available':'missing');set('ownership',verified,verified?'verified this session':'not verified',!verified);
-    const runtimeChecks=await Promise.all([exists('./hl2_launcher.html'),exists('./hl2_launcher.js'),exists('./hl2_launcher.wasm')]),runtimeReady=runtimeChecks.every(Boolean);set('runtime',runtimeReady,runtimeReady?'launcher + JS + Wasm':'incomplete');
-    const localChunk=await hasLocalBackgroundChunk();let hostedChunk=false;if(!localChunk)hostedChunk=await exists('./chunks/background1.data');const chunkReady=localChunk||hostedChunk;set('chunk',chunkReady,localChunk?'local developer cache':hostedChunk?'hosted chunks/ path':'not present',!chunkReady);
-    const threadReady=coi&&sab&&wasmThreads;$('launch').disabled=!(threadReady&&runtimeReady&&verified&&chunkReady);
-    if(!verified)$('launchHint').textContent='Choose your Portal game folder to verify it locally first.';
-    else if(!threadReady||!runtimeReady)$('launchHint').textContent='Portal is verified, but the Pages threading/runtime prerequisites are not ready yet.';
-    else if(!chunkReady)$('launchHint').textContent='Portal is verified, but background1.data is not available. The previous RangeError came from trying to parse a missing/404 chunk as packed game data. Add an authorized chunks/ source or import locally generated test chunks before launch.';
-    else $('launchHint').textContent='Portal verified. Runtime data is present; Source can launch using its normal chunks/ path.';
-    log('crossOriginIsolated=',coi,'SharedArrayBuffer=',sab,'WasmThreads=',wasmThreads,'OffscreenCanvas=',offscreen,'WebGL2=',webgl2,'Ownership=',verified,'ChunkReady=',chunkReady);
+    const coi=window.crossOriginIsolated===true;
+    const sab=typeof SharedArrayBuffer==='function';
+    const wasmThreads=testSharedMemory();
+    const offscreen=typeof OffscreenCanvas==='function';
+    const webgl2=testWebGL2();
+    const verified=ownershipVerified();
+
+    set('coi',coi,String(coi));
+    set('sab',sab,sab?'available':'missing');
+    set('wasmThreads',wasmThreads,wasmThreads?'available':'unavailable');
+    set('offscreen',offscreen,offscreen?'available':'missing',!offscreen);
+    set('webgl2',webgl2,webgl2?'available':'missing');
+    set('ownership',verified,verified?'verified this session':'not verified',!verified);
+
+    const runtimeChecks=await Promise.all([exists('./hl2_launcher.html'),exists('./hl2_launcher.js'),exists('./hl2_launcher.wasm')]);
+    const runtimeReady=runtimeChecks.every(Boolean);
+    set('runtime',runtimeReady,runtimeReady?'launcher + JS + Wasm':'incomplete');
+
+    const upstream=await probeOriginalChunk();
+    set('chunk',upstream.ok,true?'original yikes.pw reachable':'',false);
+    if(!upstream.ok)set('chunk',false,'blocked / unavailable',true);
+
+    const threadReady=coi&&sab&&wasmThreads;
+    const ready=threadReady&&runtimeReady&&verified&&upstream.ok;
+    $('launch').disabled=!ready;
+
+    if(!verified)$('launchHint').textContent='Verify your Portal folder first.';
+    else if(!threadReady||!runtimeReady)$('launchHint').textContent='Portal is verified, but the threaded Pages runtime is not ready.';
+    else if(!upstream.ok)$('launchHint').textContent='Portal is verified, but Safari cannot currently read the original yikes.pw chunk host from this Pages origin. Check the device log for the CORS/COEP/network result.';
+    else $('launchHint').textContent='Portal verified. Original upstream packed data is reachable. Launching will use yikes.pw/portal/chunks/ exactly as the upstream port does.';
+
+    log('crossOriginIsolated=',coi,'SharedArrayBuffer=',sab,'WasmThreads=',wasmThreads,'OffscreenCanvas=',offscreen,'WebGL2=',webgl2,'Ownership=',verified,'UpstreamChunk=',upstream.ok);
   }
 
   $('ownershipFolder').addEventListener('change',event=>handleOwnershipSelection(event,'folder'));
   $('ownershipFiles').addEventListener('change',event=>handleOwnershipSelection(event,'files'));
   $('clearOwnership').addEventListener('click',async()=>{sessionStorage.removeItem(OWNERSHIP_KEY);$('ownershipStatus').textContent='Verification cleared.';await refresh()});
-  $('chunkFiles').addEventListener('change',async event=>{const files=Array.from(event.target.files||[]);if(!files.length)return;const cache=await caches.open(CACHE_NAME);let stored=0,bytes=0;for(const file of files){const name=file.name.split('/').pop();if(!/^[A-Za-z0-9_.-]+\.data$/i.test(name)){log('Skipping invalid chunk filename:',file.name);continue}const url=new URL('./chunks/'+name,location.href).href;await cache.put(new Request(url),new Response(file,{headers:{'Content-Type':'application/octet-stream'}}));stored++;bytes+=file.size} $('importStatus').textContent=`Stored ${stored} local test chunk file(s), ${(bytes/1048576).toFixed(1)} MiB, on this device.`;event.target.value='';await refresh()});
-  $('clearChunks').addEventListener('click',async()=>{await caches.delete(CACHE_NAME);$('importStatus').textContent='Local developer chunks cleared.';await refresh()});
-  $('launch').addEventListener('click',()=>{location.href='./hl2_launcher.html'});$('reload').addEventListener('click',()=>{sessionStorage.removeItem('render360PagesReloaded');location.reload()});
-  window.addEventListener('error',event=>log('Page error:',event.message||event.type,event.error?.stack||''));window.addEventListener('unhandledrejection',event=>log('Unhandled rejection:',event.reason?.stack||String(event.reason)));
+  $('retryChunk').addEventListener('click',refresh);
+  $('launch').addEventListener('click',()=>{location.href='./hl2_launcher.html'});
+  $('reload').addEventListener('click',()=>{sessionStorage.removeItem('render360PagesReloaded');location.reload()});
+  window.addEventListener('error',event=>log('Page error:',event.message||event.type,event.error?.stack||''));
+  window.addEventListener('unhandledrejection',event=>log('Unhandled rejection:',event.reason?.stack||String(event.reason)));
   (async()=>{await ensureServiceWorker();await refresh()})();
 })();
 </script>
