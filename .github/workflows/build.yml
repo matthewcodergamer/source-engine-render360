@@ -122,8 +122,10 @@ jobs:
     if: github.event_name != 'pull_request'
     needs: build-wasm
     runs-on: ubuntu-latest
+    # Keep production github-pages protection intact. This separate environment
+    # is only for the isolated iPhone baseline branch.
     environment:
-      name: github-pages
+      name: portal-iphone-staging
       url: ${{ steps.deployment.outputs.page_url }}
 
     steps:
