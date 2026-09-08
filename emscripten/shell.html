@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
-    <title>yikes!</title>
+    <title>Render360 Portal upstream baseline</title>
     <style>{{{ SHELL_CSS }}}</style>
 	<style>
 		body {
@@ -23,7 +23,7 @@
     <div class="emscripten" id="status">Downloading...</div>
 
     <span id='controls'>
-      <span><input type="button" value="Fullscreen" onclick="Module.requestFullscreen(document.getElementById('pointerLock').checked, 
+      <span><input type="button" value="Fullscreen" onclick="Module.requestFullscreen(document.getElementById('pointerLock').checked,
                                                                                 document.getElementById('resize').checked)">
       </span>
     </span>
@@ -45,12 +45,27 @@
       var outputElement = document.getElementById('output');
       if (outputElement) outputElement.value = ''; // clear browser cache
 
-      // As a default initial behavior, pop up an alert when webgl context is lost. To make your
-      // application robust, you may want to override this behavior before shipping!
-      // See http://www.khronos.org/registry/webgl/specs/latest/1.0/#5.15.2
+      function render360Report(kind, message, error) {
+        var stack = error && error.stack ? '\n' + error.stack : '';
+        var detail = '[Render360 ' + kind + '] ' + String(message || '<no message>') + stack;
+        console.error(detail);
+        if (outputElement) {
+          outputElement.value += detail + '\n';
+          outputElement.scrollTop = outputElement.scrollHeight;
+        }
+        if (statusElement) statusElement.textContent = detail;
+        return detail;
+      }
+
+      // Keep the context recoverable, but expose the actual WebGL lifecycle instead
+      // of stopping at an alert on iPhone Safari.
       canvasElement.addEventListener('webglcontextlost', (e) => {
-        alert('WebGL context lost. You will need to reload the page.');
+        render360Report('WebGL context lost', e.statusMessage || 'context lost');
         e.preventDefault();
+      }, false);
+      canvasElement.addEventListener('webglcontextrestored', () => {
+        console.warn('[Render360 WebGL context restored]');
+        if (outputElement) outputElement.value += '[Render360 WebGL context restored]\n';
       }, false);
 
 	  canvasElement.widthNative = screen.availWidth
@@ -59,15 +74,18 @@
       var Module = {
         print(...args) {
           console.log(...args);
-          // These replacements are necessary if you render to raw HTML
-          //text = text.replace(/&/g, "&amp;");
-          //text = text.replace(/</g, "&lt;");
-          //text = text.replace(/>/g, "&gt;");
-          //text = text.replace('\n', '<br>', 'g');
           if (outputElement) {
             var text = args.join(' ');
             outputElement.value += text + "\n";
-            outputElement.scrollTop = outputElement.scrollHeight; // focus on bottom
+            outputElement.scrollTop = outputElement.scrollHeight;
+          }
+        },
+        printErr(...args) {
+          console.error(...args);
+          if (outputElement) {
+            var text = '[stderr] ' + args.join(' ');
+            outputElement.value += text + "\n";
+            outputElement.scrollTop = outputElement.scrollHeight;
           }
         },
         canvas: canvasElement,
@@ -76,7 +94,6 @@
           if (text === Module.setStatus.last.text) return;
           var m = text.match(/([^(]+)\((\d+(\.\d+)?)\/(\d+)\)/);
           var now = Date.now();
-          // if this is a progress update, skip it if too soon
           if (m && now - Module.setStatus.last.time < 30) return;
           Module.setStatus.last.time = now;
           Module.setStatus.last.text = text;
@@ -92,7 +109,7 @@
             progressElement.hidden = true;
             if (!text) spinnerElement.style.display = 'none';
           }
-          statusElement.innerHTML = text;
+          statusElement.textContent = text;
         },
         totalDependencies: 0,
         monitorRunDependencies(left) {
@@ -101,14 +118,29 @@
         }
       };
       Module.setStatus('Downloading...');
-      window.onerror = (event) => {
-        // TODO: do not warn on ok events like simulating an infinite loop or exitStatus
-        Module.setStatus('Exception thrown, see JavaScript console');
+
+      window.onerror = (message, source, lineno, colno, error) => {
+        render360Report(
+          'Portal JS exception',
+          String(message) + ' @ ' + String(source || '<unknown>') + ':' + String(lineno || 0) + ':' + String(colno || 0),
+          error
+        );
         spinnerElement.style.display = 'none';
-        Module.setStatus = (text) => {
-          if (text) console.error('[post-exception status] ' + text);
-        };
+        return false;
       };
+
+      window.addEventListener('unhandledrejection', (event) => {
+        var reason = event.reason;
+        render360Report(
+          'Portal unhandled rejection',
+          reason && reason.message ? reason.message : String(reason),
+          reason
+        );
+      });
+
+      console.log('[Render360 baseline] crossOriginIsolated=', window.crossOriginIsolated,
+        'SharedArrayBuffer=', typeof SharedArrayBuffer,
+        'OffscreenCanvas=', typeof OffscreenCanvas);
     </script>
     {{{ SCRIPT }}}
   </body>
