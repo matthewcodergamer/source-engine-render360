@@ -45,6 +45,24 @@ jobs:
           grep -q 'Atomics.store' emscripten/pre.js
           grep -q 'Portal JS exception' emscripten/shell.html
 
+      - name: Validate dual-source staging JavaScript
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check emscripten/portal-local-vpk.js
+          node --check emscripten/render360-pages-sw.js
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+          html = Path('emscripten/pages-index.html').read_text()
+          scripts = re.findall(r'<script(?:\s[^>]*)?>(.*?)</script>', html, flags=re.S)
+          inline = [s for s in scripts if s.strip()]
+          if not inline:
+              raise SystemExit('no inline staging script found')
+          Path('/tmp/render360-pages-inline.js').write_text(inline[-1])
+          PY
+          node --check /tmp/render360-pages-inline.js
+
       - name: Install pinned upstream Emscripten environment
         shell: bash
         run: |
