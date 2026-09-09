@@ -13,10 +13,6 @@ set -ex
 
 # Keep Source's upstream pthread/SharedArrayBuffer architecture intact, but stop
 # the browser build from attempting to dlopen desktop-only optional modules.
-# On GitHub Pages a missing .so request can return a non-Wasm response and
-# Emscripten then reports "need to see wasm magic number". Native Source treats
-# these modules as optional already; fail them immediately in the Emscripten
-# loader instead of doing a pointless network/dylink attempt.
 python3 - <<'PY'
 from pathlib import Path
 import re
@@ -29,8 +25,6 @@ pattern = re.compile(
     re.S,
 )
 replacement = r'''\1#ifdef __EMSCRIPTEN__
-	// Emscripten SIDE_MODULEs are loaded at runtime by basename from MEMFS.
-	// Normalize absolute/relative Source module names to lib*.so first.
 	const char *pBaseName = strrchr(pModuleName, '/');
 	if(!pBaseName) pBaseName = strrchr(pModuleName, '\\');
 	pBaseName = pBaseName ? pBaseName + 1 : pModuleName;
@@ -48,9 +42,6 @@ replacement = r'''\1#ifdef __EMSCRIPTEN__
 		Q_snprintf(szModuleName, sizeof(szModuleName), "lib%s", szBaseName);
 	}
 
-	// These are optional desktop/legacy modules. Native Source also continues
-	// when they are absent. Do not let Safari fetch a 404/HTML body and hand it
-	// to Emscripten's dynamic linker as though it were WebAssembly.
 	static const char *s_pOptionalBrowserModules[] = {
 		"libsourcevr.so",
 		"libvideo_bink.so",
@@ -77,9 +68,6 @@ replacement = r'''\1#ifdef __EMSCRIPTEN__
 	}
 #else
 '''
-# IMPORTANT: use a callable replacement. Passing the string directly to re.sub
-# makes Python interpret backslash sequences in the C++ body (\\ and \n), which
-# corrupts the generated tier1/interface.cpp before Clang ever sees it.
 updated, count = pattern.subn(
     lambda match: replacement.replace(r'\1', match.group(1), 1),
     text,
@@ -97,7 +85,6 @@ for marker in (
 ):
     if marker not in updated:
         raise SystemExit(f'Render360 Portal: loader patch missing {marker}')
-# Guard against the exact escaping regression that previously broke CI.
 if "strrchr(pModuleName, '\\\\');" not in updated:
     raise SystemExit('Render360 Portal: generated backslash basename check is malformed')
 if 'Msg("Render360: optional browser module skipped: %s\\n", szModuleName);' not in updated:
@@ -108,15 +95,11 @@ path.write_text(updated)
 print('Render360 Portal: patched Sys_LoadModule optional browser-module handling')
 PY
 
-#rm -rf build/install
 python3 waf configure -T $buildtype --notests -4 --togles --emscripten \
 	--disable-warns --build-games=portal --prefix=build/install
 python3 waf install $@
 find build/ -name '*.map' -exec cp {} build/install/ \;
 
-# Emscripten dynamic linking expects SIDE_MODULEs to be WebAssembly modules even
-# when they use a Unix-style .so suffix. Fail CI immediately if a native ELF,
-# HTML error page, or other non-Wasm file ever enters the runtime module set.
 python3 - <<'PY'
 from pathlib import Path
 mods = sorted(Path('build/install').glob('*.so'))
@@ -138,10 +121,6 @@ Path('build/install/render360-wasm-side-modules.txt').write_text(
 print(f'Render360 Portal: verified {len(mods)} WebAssembly SIDE_MODULEs')
 PY
 
-# These are not optional probes: they are the Source filesystem/engine/material
-# and ToGL shader path needed to reach a real Portal frame. Refuse to deploy a
-# Pages runtime that is missing any of them, even if the generic .so validation
-# above succeeds.
 for required in \
 	libfilesystem_stdio.so \
 	libengine.so \
@@ -157,43 +136,36 @@ done
 
 echo "Render360 Portal: required filesystem/engine/ToGL module set present"
 
-# Source uses dlopen()/dlsym() itself. Emscripten's documented runtime-dylink
-# mode says not to pass SIDE_MODULEs on the main-module link command; doing so
-# autoloads every library before Source later dlopens it and is what produced the
-# repeated __start_em_asm/__stop_em_asm duplicate-symbol warnings on iPhone.
-# Put the Wasm .so files in MEMFS instead, so each Source dlopen loads the module
-# once, on demand, through the handle Source expects.
 preload_libs=""
 for lib in build/install/*.so; do
 	base=$(basename "$lib")
 	preload_libs="$preload_libs --preload-file $lib@/$base"
 done
 
-# Keep a growable shared heap, but start lower on iPhone. The previous 512 MiB
-# initial heap was live at the same time as a ~221 MiB background chunk, ~51 MiB
-# shader overlay, the packaged SIDE_MODULE data and Safari/WebGL allocations.
-# 384 MiB leaves more headroom for WebKit's WebContent process while retaining a
-# 1536 MiB maximum if Source really needs to grow later. Keep only two workers
-# eagerly pooled; STRICT=0 still permits Emscripten to create more on demand.
-#
-# Runtime dlopen means the main module must carry the C/C++ runtime symbols that
-# SIDE_MODULEs can request. Emscripten documents EMCC_FORCE_STDLIBS=1 as the
-# broad fallback, but that also force-links unrelated optional system libraries.
-# With this pinned SDK that drags WebGPU/Dawn references such as
-# wgpuTextureViewRelease/wgpuTextureViewSetLabel into a ToGL/WebGL build and the
-# final link aborts. Force only Source's core C/C++ runtime libraries instead.
-EMCC_FORCE_STDLIBS=libc,libc++,libc++abi emcc \
+# iOS Safari can jetsam a WebContent process once this threaded Source build
+# combines a large Wasm module, several workers, a 200+ MiB Portal data set and
+# WebGL allocations. Keep the real threaded architecture but make the release
+# linker optimize for size, cap the shared heap below the iPhone soft process
+# limit, and avoid debug name/stack instrumentation in the deployed build.
+# GROWABLE_ARRAYBUFFERS=1 is feature-detected by Emscripten and reduces the
+# overhead of memory growth + pthreads on browsers that implement it.
+EMCC_FORCE_STDLIBS=libc,libc++,libc++abi emcc -Os \
 	-sUSE_BZIP2=1 -sUSE_SDL=2 -sUSE_FREETYPE=1 -sUSE_LIBJPEG=1 -sUSE_LIBPNG -sMALLOC=mimalloc \
 	-sMAIN_MODULE -sINCLUDE_FULL_LIBRARY=1 \
-	-sINITIAL_MEMORY=384mb -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=1536mb -sMEMORY_GROWTH_LINEAR_STEP=64mb \
+	-sINITIAL_MEMORY=384mb -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=1024mb -sMEMORY_GROWTH_LINEAR_STEP=32mb -sGROWABLE_ARRAYBUFFERS=1 \
 	-sSHARED_MEMORY=1 -sUSE_PTHREADS -sPTHREAD_POOL_SIZE=2 -sPTHREAD_POOL_SIZE_STRICT=0 \
 	-sFULL_ES3 -sSTACK_SIZE=4mb --shell-file=emscripten/shell.html \
-	-sASSERTIONS=2 -sSTACK_OVERFLOW_CHECK=2 --profiling-funcs \
+	-sASSERTIONS=1 -sSTACK_OVERFLOW_CHECK=1 \
 	-sPROXY_TO_PTHREAD -sOFFSCREENCANVASES_TO_PTHREAD="#canvas" -sOFFSCREENCANVAS_SUPPORT=1 \
 	--pre-js emscripten/pre.js --post-js emscripten/post.js \
 	$preload_libs \
 	build/launcher_main/libhl2_launcher.a \
 	-o build/launcher_main/hl2_launcher.html
+
+# Record deploy sizes in CI so future regressions that grow the threaded Wasm
+# or SIDE_MODULE package are visible before they become another iPhone reload.
+ls -lh build/launcher_main/hl2_launcher.wasm build/launcher_main/hl2_launcher.data || true
+du -ch build/install/*.so | tail -n 1 || true
 
 cp build/launcher_main/hl2_launcher.* build/install/
 cp -r emscripten/assets build/install/
