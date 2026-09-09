@@ -1,7 +1,13 @@
 (() => {
   'use strict';
 
-  const CACHE_NAME = 'render360-portal-local-chunks-v2';
+  // Keep the boot overlay in its own cache. The local VPK map builder clears
+  // and rebuilds render360-portal-local-chunks-v2 before packing maps; when the
+  // overlay shared that cache it was silently deleted immediately after a
+  // successful Portal-folder verification. That produced the confusing state
+  // "local fallback ready" + "choose folder to prepare boot textures" and could
+  // make the launcher fall back to the network again.
+  const CACHE_NAME = 'render360-portal-boot-overlay-v1';
   const OVERLAY_PATH = './render360-bootstrap-overlay.data';
 
   // Source asks for these before/while creating the first D3D9/WebGL materials.
