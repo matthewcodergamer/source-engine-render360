@@ -17,8 +17,11 @@
  * chunks just to refresh bootstrap material/shader resources.
  *
  * Mutable engine assets (.js/.wasm/.so/.html and the generated launcher .data
- * package containing runtime SIDE_MODULEs) are always fetched network-first
- * with cache:no-store. Stable filenames must never mix across Pages deploys.
+ * package containing runtime SIDE_MODULEs) are normally fetched network-first
+ * with cache:no-store. hl2_launcher.data is a special case: on iOS Safari the
+ * preload fetch intermittently fails when a large same-origin data package is
+ * re-wrapped in another streaming Response. It is already same-origin, so it
+ * can be returned directly without CORP/COEP decoration.
  *
  * No retail game data is committed to GitHub Pages.
  */
@@ -184,6 +187,17 @@ async function fetchRuntimeFresh(request) {
   });
 }
 
+async function fetchLauncherDataDirect(request) {
+  // Emscripten's preload package is same-origin and therefore does not need a
+  // Cross-Origin-Resource-Policy header to satisfy COEP. Returning the original
+  // response also avoids a WebKit failure observed when the large .data body is
+  // piped through new Response(response.body, ...).
+  return fetch(new Request(request, {
+    cache: 'no-store',
+    credentials: 'same-origin'
+  }));
+}
+
 self.addEventListener('fetch', event => {
   const request = event.request;
   if (request.cache === 'only-if-cached' && request.mode !== 'same-origin') return;
@@ -202,6 +216,9 @@ self.addEventListener('fetch', event => {
     }
     if (request.method === 'GET' && /\/chunks\/[^/]+\.data$/i.test(url.pathname)) {
       return servePortalChunk(request, url);
+    }
+    if (request.method === 'GET' && url.pathname.endsWith('/hl2_launcher.data')) {
+      return fetchLauncherDataDirect(request);
     }
     if (request.method === 'GET' && MUTABLE_RUNTIME_RE.test(url.pathname)) {
       return fetchRuntimeFresh(request);
