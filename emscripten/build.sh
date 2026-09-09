@@ -153,7 +153,7 @@ do
 		echo "Render360 Portal: required Wasm module missing: $required" >&2
 		exit 1
 	fi
-	done
+done
 
 echo "Render360 Portal: required filesystem/engine/ToGL module set present"
 
@@ -163,9 +163,14 @@ for lib in build/install/*.so; do
 	link_libs="$link_libs -l$libname"
 done
 
+# Source is already proxied off the browser main thread. Let Emscripten size the
+# warm pthread pool to the device instead of forcing eight Workers on every
+# iPhone, and allow on-demand Workers if Source briefly exceeds that pool.
+# PTHREAD_POOL_SIZE_STRICT=2 turns pool exhaustion into a hard runtime failure;
+# that is exactly the wrong failure mode for this off-the-shelf engine port.
 emcc \
 	-sUSE_BZIP2=1 -sUSE_SDL=2 -sUSE_FREETYPE=1 -sUSE_LIBJPEG=1 -sUSE_LIBPNG -sMALLOC=mimalloc \
-	-sMAIN_MODULE -sINITIAL_MEMORY=2047mb -sSHARED_MEMORY=1 -sUSE_PTHREADS -sPTHREAD_POOL_SIZE=8 -sPTHREAD_POOL_SIZE_STRICT=2 \
+	-sMAIN_MODULE -sINITIAL_MEMORY=2047mb -sSHARED_MEMORY=1 -sUSE_PTHREADS -sPTHREAD_POOL_SIZE=navigator.hardwareConcurrency -sPTHREAD_POOL_SIZE_STRICT=0 \
 	-sFULL_ES3 -sSTACK_SIZE=4mb --shell-file=emscripten/shell.html \
 	-sASSERTIONS=2 -sSTACK_OVERFLOW_CHECK=2 --profiling-funcs \
 	-sPROXY_TO_PTHREAD -sOFFSCREENCANVASES_TO_PTHREAD="#canvas" -sOFFSCREENCANVAS_SUPPORT=1 \
