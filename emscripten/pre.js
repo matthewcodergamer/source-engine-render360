@@ -58,6 +58,13 @@ class DataLoader {
 			throw new Error(`no such map: ${mapName}`)
 		}
 
+		// Load the ~50 MiB bootstrap/shader overlay to completion before starting
+		// the ~220 MiB background XHR. The old order parsed background1 first and
+		// then fetched the overlay while the background ArrayBuffer was still held
+		// by the XHR callback. On iPhone Safari that creates a large avoidable peak
+		// exactly while WebAssembly, pthread workers and SIDE_MODULEs are starting.
+		await this.loadBootOverlay()
+
 		// The packed Portal chunks are deltas: a later map depends on all earlier
 		// chunks, so load only the required prefix here. Do not speculatively load
 		// the next chamber. background1.data is already ~220 MiB and the first
@@ -85,6 +92,29 @@ class DataLoader {
 			spinnerElement.style.display = 'none'
 			statusElement.innerText = ''
 			progressElement.hidden = true
+		}
+	}
+
+	installOwnedFile(path, blob) {
+		const slash = path.lastIndexOf('/')
+		const parent = slash > 0 ? path.slice(0, slash) : '/'
+		const name = slash >= 0 ? path.slice(slash + 1) : path
+		FS.mkdirTree(parent)
+
+		// Boot-overlay files intentionally overlap a few background resources.
+		// Replace an existing MEMFS node before installing the newer record.
+		try { FS.unlink(path) } catch(_) {}
+
+		// FS.writeFile() copies every record into a second allocation. During a
+		// 220 MiB XHR that means Safari temporarily owns both the complete response
+		// and another ~220 MiB of MEMFS copies. createDataFile(..., canOwn=true)
+		// lets MEMFS keep views into the original ArrayBuffer instead, avoiding the
+		// transient duplicate. Fall back only if a future Emscripten build removes
+		// the legacy helper.
+		if(typeof FS.createDataFile === 'function') {
+			FS.createDataFile(parent, name, blob, true, true, true)
+		} else {
+			FS.writeFile(path, blob)
 		}
 	}
 
@@ -123,9 +153,7 @@ class DataLoader {
 				continue
 			}
 
-			const dir = path.replace(/\/[^\/]+$/, '')
-			FS.mkdirTree(dir)
-			FS.writeFile(path, blob)
+			this.installOwnedFile(path, blob)
 		}
 
 		return { fileCount, byteLength: dv.byteLength }
@@ -136,10 +164,9 @@ class DataLoader {
 
 		this.bootOverlayPromise = (async () => {
 			try {
-				// Fetch the tiny user-generated VPK overlay separately from the ~220 MiB
-				// background chunk. Concatenating them into one service-worker stream was
-				// intermittently ending as an XHR network error on iOS Safari even though
-				// the launch-page header probe returned HTTP 200.
+				// Fetch the user-generated VPK bootstrap/shader overlay separately from
+				// the large map chunk, and finish it first so their raw response buffers
+				// never overlap during startup on iPhone Safari.
 				const response = await fetch('render360-bootstrap-overlay.data', {
 					cache: 'no-store',
 					credentials: 'same-origin'
@@ -180,15 +207,13 @@ class DataLoader {
 			reject(new Error(`cannot load map ${mapName}: network error`))
 		}
 
-		xhr.onload = async () => {
+		xhr.onload = () => {
 			try {
 				if(xhr.status < 200 || xhr.status >= 300) {
 					throw new Error(`cannot load map ${mapName}: HTTP ${xhr.status}`)
 				}
 
 				const result = this.writeDataBuffer(xhr.response, `${mapName}.data`)
-				if(mapName === 'background1') await this.loadBootOverlay()
-
 				this.setProgress(mapName, 1)
 				Module.print?.(`[Render360] loaded ${mapName}.data: ${result.fileCount} records, ${result.byteLength} bytes`)
 				xhr.onprogress = null
