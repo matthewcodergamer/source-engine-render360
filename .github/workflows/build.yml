@@ -38,13 +38,13 @@ jobs:
           test -f emscripten/build.sh
           grep -q -- '-sSHARED_MEMORY=1' emscripten/build.sh
           grep -q -- '-sUSE_PTHREADS' emscripten/build.sh
-          grep -q -- '-sPTHREAD_POOL_SIZE=navigator.hardwareConcurrency' emscripten/build.sh
+          grep -q -- '-sPTHREAD_POOL_SIZE=2' emscripten/build.sh
           grep -q -- '-sPTHREAD_POOL_SIZE_STRICT=0' emscripten/build.sh
           grep -q -- '-sPROXY_TO_PTHREAD' emscripten/build.sh
           grep -q -- '-sOFFSCREENCANVASES_TO_PTHREAD' emscripten/build.sh
           grep -q -- '-sMAIN_MODULE' emscripten/build.sh
           grep -q -- '-sINCLUDE_FULL_LIBRARY=1' emscripten/build.sh
-          grep -q -- '-sINITIAL_MEMORY=512mb' emscripten/build.sh
+          grep -q -- '-sINITIAL_MEMORY=384mb' emscripten/build.sh
           grep -q -- '-sALLOW_MEMORY_GROWTH=1' emscripten/build.sh
           grep -q -- '-sMAXIMUM_MEMORY=1536mb' emscripten/build.sh
           grep -q -- '-sMEMORY_GROWTH_LINEAR_STEP=64mb' emscripten/build.sh
@@ -56,15 +56,19 @@ jobs:
           fi
           grep -q 'Atomics.store' emscripten/pre.js
           grep -q 'Do not speculatively load' emscripten/pre.js
+          grep -q 'createDataFile' emscripten/pre.js
+          grep -q 'await this.loadBootOverlay()' emscripten/pre.js
           if grep -q 'background preload failed' emscripten/pre.js; then
             echo 'Render360 Portal: speculative next-map preload returned unexpectedly.' >&2
             exit 1
           fi
           grep -q 'Portal JS exception' emscripten/shell.html
+          grep -q 'RENDER360_OUTPUT_MAX_CHARS' emscripten/shell.html
           grep -q 'libsourcevr.so' emscripten/build.sh
           grep -q 'libstdshader_dx9.so' emscripten/build.sh
           grep -q 'BOOT_OVERLAY_PATH' emscripten/render360-pages-sw.js
           grep -q 'local-boot' emscripten/render360-pages-sw.js
+          grep -q 'fetchLauncherDataDirect' emscripten/render360-pages-sw.js
 
       - name: Validate dual-source staging JavaScript
         shell: bash
@@ -233,7 +237,7 @@ jobs:
             "commit": "${GITHUB_SHA}",
             "runtimeModel": "pthreads-shared-memory-runtime-dlopen",
             "sideModuleDelivery": "preloaded-memfs",
-            "initialMemoryMiB": 512,
+            "initialMemoryMiB": 384,
             "maximumMemoryMiB": 1536,
             "memoryGrowth": true,
             "bootAssetOverlay": "selected-portal-vpk",
