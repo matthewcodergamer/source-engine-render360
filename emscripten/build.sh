@@ -169,11 +169,12 @@ for lib in build/install/*.so; do
 	preload_libs="$preload_libs --preload-file $lib@/$base"
 done
 
-# The old 2047 MiB fixed shared heap reserved essentially the entire Wasm32
-# address-space ceiling at startup. Safari/WebKit has a long history of shared
-# Wasm memory pressure at large fixed/max sizes. Start at 512 MiB and grow in
-# 64 MiB steps only as Source actually needs memory, with a 1536 MiB ceiling.
-# This preserves pthreads/SharedArrayBuffer while avoiding a giant eager heap.
+# Keep a growable shared heap, but start lower on iPhone. The previous 512 MiB
+# initial heap was live at the same time as a ~221 MiB background chunk, ~51 MiB
+# shader overlay, the packaged SIDE_MODULE data and Safari/WebGL allocations.
+# 384 MiB leaves more headroom for WebKit's WebContent process while retaining a
+# 1536 MiB maximum if Source really needs to grow later. Keep only two workers
+# eagerly pooled; STRICT=0 still permits Emscripten to create more on demand.
 #
 # Runtime dlopen means the main module must carry the C/C++ runtime symbols that
 # SIDE_MODULEs can request. Emscripten documents EMCC_FORCE_STDLIBS=1 as the
@@ -184,8 +185,8 @@ done
 EMCC_FORCE_STDLIBS=libc,libc++,libc++abi emcc \
 	-sUSE_BZIP2=1 -sUSE_SDL=2 -sUSE_FREETYPE=1 -sUSE_LIBJPEG=1 -sUSE_LIBPNG -sMALLOC=mimalloc \
 	-sMAIN_MODULE -sINCLUDE_FULL_LIBRARY=1 \
-	-sINITIAL_MEMORY=512mb -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=1536mb -sMEMORY_GROWTH_LINEAR_STEP=64mb \
-	-sSHARED_MEMORY=1 -sUSE_PTHREADS -sPTHREAD_POOL_SIZE=navigator.hardwareConcurrency -sPTHREAD_POOL_SIZE_STRICT=0 \
+	-sINITIAL_MEMORY=384mb -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=1536mb -sMEMORY_GROWTH_LINEAR_STEP=64mb \
+	-sSHARED_MEMORY=1 -sUSE_PTHREADS -sPTHREAD_POOL_SIZE=2 -sPTHREAD_POOL_SIZE_STRICT=0 \
 	-sFULL_ES3 -sSTACK_SIZE=4mb --shell-file=emscripten/shell.html \
 	-sASSERTIONS=2 -sSTACK_OVERFLOW_CHECK=2 --profiling-funcs \
 	-sPROXY_TO_PTHREAD -sOFFSCREENCANVASES_TO_PTHREAD="#canvas" -sOFFSCREENCANVAS_SUPPORT=1 \
