@@ -77,7 +77,14 @@ replacement = r'''\1#ifdef __EMSCRIPTEN__
 	}
 #else
 '''
-updated, count = pattern.subn(replacement, text, count=1)
+# IMPORTANT: use a callable replacement. Passing the string directly to re.sub
+# makes Python interpret backslash sequences in the C++ body (\\ and \n), which
+# corrupts the generated tier1/interface.cpp before Clang ever sees it.
+updated, count = pattern.subn(
+    lambda match: replacement.replace(r'\1', match.group(1), 1),
+    text,
+    count=1,
+)
 if count != 1:
     raise SystemExit('Render360 Portal: could not locate Emscripten Sys_LoadModule block')
 for marker in (
