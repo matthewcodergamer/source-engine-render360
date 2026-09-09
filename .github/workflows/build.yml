@@ -44,6 +44,8 @@ jobs:
           grep -q -- '-sMAIN_MODULE' emscripten/build.sh
           grep -q 'Atomics.store' emscripten/pre.js
           grep -q 'Portal JS exception' emscripten/shell.html
+          grep -q 'libsourcevr.so' emscripten/build.sh
+          grep -q 'libstdshader_dx9.so' emscripten/build.sh
 
       - name: Validate dual-source staging JavaScript
         shell: bash
@@ -102,6 +104,23 @@ jobs:
           cp emscripten/pages-index.html build/install/index.html
           cp emscripten/render360-pages-sw.js build/install/render360-pages-sw.js
           cp emscripten/portal-local-vpk.js build/install/portal-local-vpk.js
+
+          # background1 becomes available before the remaining chamber chunks
+          # finish packing. Do not let the iPhone launch midway through the local
+          # VPK build just because the initial chunk probe already succeeds.
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('build/install/index.html')
+          text = path.read_text()
+          old = 'const ready=threadReady&&runtimeReady&&verified&&chunk.ok;'
+          new = 'const ready=threadReady&&runtimeReady&&verified&&chunk.ok&&!buildingLocal;'
+          if old not in text:
+              raise SystemExit('Render360 Portal: staging launch readiness expression changed unexpectedly')
+          text = text.replace(old, new, 1)
+          path.write_text(text)
+          PY
+          grep -q 'chunk.ok&&!buildingLocal' build/install/index.html
+
           touch build/install/.nojekyll
 
           cat > build/install/render360-baseline.json <<JSON
