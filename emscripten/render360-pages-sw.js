@@ -5,9 +5,10 @@
  * SharedArrayBuffer runtime can be exercised on static hosting.
  *
  * Portal's Source runtime still requests the original same-origin
- * `chunks/<map>.data` path. This worker provides that path from either:
- *   1. chunks generated locally from the user's selected Portal/VPK files, or
- *   2. the original yikes.pw packed-data host when CORS allows it.
+ * `chunks/<map>.data` path. Keep the original web port's packed data as the
+ * authoritative first choice because those chunks were generated from the
+ * Source engine's real OpenForRead trace/order. A locally generated VPK chunk
+ * is only the fallback when the original host cannot be reached.
  *
  * The tiny user-generated Source boot overlay is deliberately served as its
  * own response. Earlier revisions appended it to background1.data with a
@@ -28,9 +29,17 @@ const OLD_LOCAL_CHUNK_CACHE = 'render360-portal-local-chunks-v1';
 const BOOT_OVERLAY_PATH = './render360-bootstrap-overlay.data';
 const UPSTREAM_CHUNK_BASE = 'https://yikes.pw/portal/chunks/';
 const UPSTREAM_TIMEOUT_MS = 8000;
+const UPSTREAM_RETRY_COOLDOWN_MS = 60000;
 const MUTABLE_RUNTIME_RE = /\.(?:html?|js|mjs|wasm|so|json|data)$/i;
 
-const REBUILD_LOCAL_CHUNKS_ON_ACTIVATE = true;
+// Never delete the current local cache merely because a new service worker
+// activates. The iPhone staging page can spend minutes building chunks from
+// user-selected VPKs; deleting that same cache during the launcher navigation
+// makes the following /chunks/background1.data request fall through to the
+// network and look like an extraction/RAM failure. Schema changes should bump
+// LOCAL_CHUNK_CACHE instead.
+const REBUILD_LOCAL_CHUNKS_ON_ACTIVATE = false;
+let upstreamUnavailableUntil = 0;
 
 self.addEventListener('install', event => {
   self.skipWaiting();
@@ -94,31 +103,45 @@ async function fetchUpstreamChunk(upstreamUrl) {
 async function servePortalChunk(request, url) {
   const name = url.pathname.split('/').pop();
   const cache = await caches.open(LOCAL_CHUNK_CACHE);
+  const upstreamUrl = UPSTREAM_CHUNK_BASE + encodeURIComponent(name);
+
+  // The original hosted chunks are the canonical Portal web-port chunks. Use
+  // them first whenever the host is healthy. This restores the exact map delta
+  // plan that weliveinhell/source-engine's DataLoader was written for instead
+  // of silently preferring our heuristic VPK reconstruction just because a
+  // local cache entry exists.
+  if (Date.now() >= upstreamUnavailableUntil) {
+    try {
+      const upstream = await fetchUpstreamChunk(upstreamUrl);
+      if (!upstream.ok) throw new Error(`HTTP ${upstream.status}`);
+      upstreamUnavailableUntil = 0;
+      return withIsolationHeaders(upstream, {
+        'Cache-Control': 'no-store, max-age=0',
+        'X-Render360-Chunk-Source': 'upstream-yikes'
+      });
+    } catch (error) {
+      upstreamUnavailableUntil = Date.now() + UPSTREAM_RETRY_COOLDOWN_MS;
+      console.warn('[Render360 Pages SW] original Portal chunk unavailable; trying local VPK fallback', upstreamUrl, error);
+    }
+  }
+
+  // Only fall back to browser-generated chunks after the original host failed.
+  // Cache Storage can stream the stored Response back without rebuilding all
+  // VPKs or retaining the user's selected File objects in the launcher page.
   const local = await cache.match(request, { ignoreSearch: true });
-  if (local) {
+  if (local && local.ok) {
     return withIsolationHeaders(local, {
       'Cache-Control': 'no-store, max-age=0',
       'X-Render360-Chunk-Source': 'local-vpk'
     });
   }
 
-  const upstreamUrl = UPSTREAM_CHUNK_BASE + encodeURIComponent(name);
-  try {
-    const upstream = await fetchUpstreamChunk(upstreamUrl);
-    if (!upstream.ok) throw new Error(`HTTP ${upstream.status}`);
-    return withIsolationHeaders(upstream, {
-      'Cache-Control': 'no-store, max-age=0',
-      'X-Render360-Chunk-Source': 'upstream-yikes'
-    });
-  } catch (error) {
-    console.warn('[Render360 Pages SW] upstream chunk unavailable', upstreamUrl, error);
-    return withIsolationHeaders(new Response(
-      'Portal chunk unavailable from both local VPK cache and original upstream host: ' + String(error),
-      { status: 502, headers: { 'Content-Type': 'text/plain; charset=utf-8' } }
-    ), {
-      'X-Render360-Chunk-Source': 'unavailable'
-    });
-  }
+  return withIsolationHeaders(new Response(
+    'Portal chunk unavailable from the original Source web-port host and the local VPK cache.',
+    { status: 502, headers: { 'Content-Type': 'text/plain; charset=utf-8' } }
+  ), {
+    'X-Render360-Chunk-Source': 'unavailable'
+  });
 }
 
 async function serveBootOverlay() {
