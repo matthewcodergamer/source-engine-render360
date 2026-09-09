@@ -9,6 +9,11 @@
  *   1. chunks generated locally from the user's selected Portal/VPK files, or
  *   2. the original yikes.pw packed-data host when CORS allows it.
  *
+ * Mutable engine assets (.js/.wasm/.so/.html) are always fetched network-first
+ * with cache:no-store. The filenames stay stable between Pages deployments, and
+ * mixing an old Emscripten glue file with new SIDE_MODULEs (or vice versa) can
+ * produce misleading dylink/DataView failures on Safari.
+ *
  * No retail game data is committed to GitHub Pages.
  */
 
@@ -16,6 +21,7 @@ const LOCAL_CHUNK_CACHE = 'render360-portal-local-chunks-v2';
 const OLD_LOCAL_CHUNK_CACHE = 'render360-portal-local-chunks-v1';
 const UPSTREAM_CHUNK_BASE = 'https://yikes.pw/portal/chunks/';
 const UPSTREAM_TIMEOUT_MS = 8000;
+const MUTABLE_RUNTIME_RE = /\.(?:html?|js|mjs|wasm|so|json)$/i;
 
 self.addEventListener('install', event => {
   self.skipWaiting();
@@ -97,6 +103,15 @@ async function servePortalChunk(request, url) {
   }
 }
 
+async function fetchRuntimeFresh(request, url) {
+  const freshRequest = new Request(request, { cache: 'no-store' });
+  const response = await fetch(freshRequest);
+  return withIsolationHeaders(response, {
+    'Cache-Control': 'no-store, max-age=0',
+    'X-Render360-Runtime-Fresh': '1'
+  });
+}
+
 self.addEventListener('fetch', event => {
   const request = event.request;
   if (request.cache === 'only-if-cached' && request.mode !== 'same-origin') return;
@@ -113,6 +128,9 @@ self.addEventListener('fetch', event => {
     if (request.method === 'GET' && /\/chunks\/[^/]+\.data$/i.test(url.pathname)) {
       return servePortalChunk(request, url);
     }
+    if (request.method === 'GET' && MUTABLE_RUNTIME_RE.test(url.pathname)) {
+      return fetchRuntimeFresh(request, url);
+    }
     return withIsolationHeaders(await fetch(request));
   })().catch(error => {
     console.error('[Render360 Pages SW] fetch failed', request.url, error);
@@ -122,7 +140,8 @@ self.addEventListener('fetch', event => {
         'Content-Type': 'text/plain; charset=utf-8',
         'Cross-Origin-Opener-Policy': 'same-origin',
         'Cross-Origin-Embedder-Policy': 'require-corp',
-        'Cross-Origin-Resource-Policy': 'same-origin'
+        'Cross-Origin-Resource-Policy': 'same-origin',
+        'Cache-Control': 'no-store, max-age=0'
       }
     });
   }));
