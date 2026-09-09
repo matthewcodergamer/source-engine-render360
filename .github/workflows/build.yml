@@ -44,18 +44,25 @@ jobs:
           grep -q -- '-sOFFSCREENCANVASES_TO_PTHREAD' emscripten/build.sh
           grep -q -- '-sMAIN_MODULE' emscripten/build.sh
           grep -q -- '-sINCLUDE_FULL_LIBRARY=1' emscripten/build.sh
+          grep -q -- '-Os' emscripten/build.sh
           grep -q -- '-sINITIAL_MEMORY=384mb' emscripten/build.sh
           grep -q -- '-sALLOW_MEMORY_GROWTH=1' emscripten/build.sh
-          grep -q -- '-sMAXIMUM_MEMORY=1536mb' emscripten/build.sh
-          grep -q -- '-sMEMORY_GROWTH_LINEAR_STEP=64mb' emscripten/build.sh
+          grep -q -- '-sMAXIMUM_MEMORY=1024mb' emscripten/build.sh
+          grep -q -- '-sMEMORY_GROWTH_LINEAR_STEP=32mb' emscripten/build.sh
+          grep -q -- '-sGROWABLE_ARRAYBUFFERS=1' emscripten/build.sh
           grep -q -- '--preload-file' emscripten/build.sh
           grep -Fq 'EMCC_FORCE_STDLIBS=libc,libc++,libc++abi' emscripten/build.sh
+          if grep -q -- '--profiling-funcs' emscripten/build.sh; then
+            echo 'Render360 Portal: profiling function names returned to the iPhone release build.' >&2
+            exit 1
+          fi
           if grep -q 'link_libs=' emscripten/build.sh; then
             echo 'Render360 Portal: SIDE_MODULEs were returned to load-time linking; Source requires runtime dlopen.' >&2
             exit 1
           fi
           grep -q 'Atomics.store' emscripten/pre.js
-          grep -q 'Do not speculatively load' emscripten/pre.js
+          grep -q 'streamDataResponse' emscripten/pre.js
+          grep -q 'response.body.getReader' emscripten/pre.js
           grep -q 'createDataFile' emscripten/pre.js
           grep -q 'await this.loadBootOverlay()' emscripten/pre.js
           if grep -q 'background preload failed' emscripten/pre.js; then
@@ -77,6 +84,7 @@ jobs:
           node --check emscripten/portal-local-vpk.js
           node --check emscripten/portal-boot-overlay.js
           node --check emscripten/render360-pages-sw.js
+          node --check emscripten/pre.js
           grep -q 'debugluxelsnoalpha.vtf' emscripten/portal-boot-overlay.js
           grep -q 'identitylightwarp.vtf' emscripten/portal-boot-overlay.js
           grep -q 'normalizedrandomdirections2d.vtf' emscripten/portal-boot-overlay.js
@@ -116,7 +124,6 @@ jobs:
           test -s build/install/hl2_launcher.html
           test -s build/install/hl2_launcher.js
           test -s build/install/hl2_launcher.wasm
-          # Runtime dlopen SIDE_MODULEs are packaged into MEMFS by --preload-file.
           test -s build/install/hl2_launcher.data
           grep -a -q 'hl2_launcher.data' build/install/hl2_launcher.js
           grep -a -q 'libengine.so' build/install/hl2_launcher.js
@@ -125,11 +132,8 @@ jobs:
           test -s emscripten/portal-boot-overlay.js
           grep -q 'Portal JS exception' build/install/hl2_launcher.html
           grep -q 'chunks/${mapName}.data' emscripten/pre.js
+          grep -q 'streamDataResponse' emscripten/pre.js
 
-          # Public CI stays runtime-only. The browser fallback generates .data
-          # chunks from the tester's own selected Portal/VPK files and stores
-          # them only in that browser's Cache Storage. hl2_launcher.data is the
-          # generated Emscripten runtime package and is explicitly allowed.
           if find build/install -type f -path '*/chunks/*.data' -print -quit | grep -q .; then
             echo 'Refusing to publish bundled Portal .data chunks.' >&2
             exit 1
@@ -140,11 +144,6 @@ jobs:
           cp emscripten/portal-local-vpk.js build/install/portal-local-vpk.js
           cp emscripten/portal-boot-overlay.js build/install/portal-boot-overlay.js
 
-          # Patch the generic staging page into the iPhone runtime page. Keep
-          # indentation inside Python string literals explicit: YAML removes the
-          # block-scalar indentation before the script reaches Python, which made
-          # the previous triple-quoted multiline probes silently lose spaces and
-          # fail even though the HTML was correct.
           python3 - <<'PY'
           from pathlib import Path
           path = Path('build/install/index.html')
@@ -238,8 +237,12 @@ jobs:
             "runtimeModel": "pthreads-shared-memory-runtime-dlopen",
             "sideModuleDelivery": "preloaded-memfs",
             "initialMemoryMiB": 384,
-            "maximumMemoryMiB": 1536,
+            "maximumMemoryMiB": 1024,
+            "memoryGrowthMiB": 32,
             "memoryGrowth": true,
+            "growableArrayBuffers": true,
+            "releaseLinkOptimization": "-Os",
+            "streamedPortalData": true,
             "bootAssetOverlay": "selected-portal-vpk",
             "diagnostics": true,
             "pagesIsolation": "service-worker-staging-only",
@@ -252,11 +255,6 @@ jobs:
           (cd build/install && zip -9 -r "$GITHUB_WORKSPACE/Render360-Portal-iPhone-Baseline.zip" .)
           ls -lh Render360-Portal-iPhone-Baseline.zip
 
-      # Pull-request tokens can be restricted by GitHub and, in this repo,
-      # artifact finalization returns HTTP 403 even after all bytes upload.
-      # PR runs only need to prove that Source builds and the staging runtime
-      # validates. The branch push run is the deployable build, so keep the
-      # downloadable artifact and Pages publishing push/workflow_dispatch-only.
       - name: Upload runtime artifact
         if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v7
