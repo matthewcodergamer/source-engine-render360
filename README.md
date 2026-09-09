@@ -1,43 +1,59 @@
-# source-engine-render360
+# Emscripten port for the source engine (only portal tested)
 
-Emscripten port for the Source engine (Portal baseline), with an isolated iPhone Safari staging lane.
+## hosted on [yikes.pw](https://yikes.pw)
 
-## Staging branch
+## list of broken stuff
++ sound
++ saving/loading (works, TODO: save to browser storage)
++ sometimes render breaks (something related to lightmaps?)
++ fullscreen html button (works through game settings)
 
-`render360/iphone-baseline` preserves the upstream Source WebAssembly architecture while testing iPhone/WebKit compatibility before anything is merged back into the main Render360 project.
+## building
 
-The staging build keeps:
+use docker, something like this, there might be some missing libs idk:
+```sh
+docker run --rm -it -v.:/source-engine debian
 
-- pthreads / SharedArrayBuffer
-- `PROXY_TO_PTHREAD`
-- OffscreenCanvas
-- `MAIN_MODULE` / Emscripten SIDE_MODULEs
-- ToGL / WebGL2
-- Source's existing `chunks/<map>.data` loader contract
+apt update
+apt install git curl wget python3 xz-utils llvm binutils -y
 
-## Portal data
+# activate emsdk
+cd /
+git clone https://github.com/emscripten-core/emsdk.git
+cd emsdk
+git checkout 2d480a1b7c7a34a354188d93f3e89190a44a1d21
+./emsdk install latest
+./emsdk activate latest
+source ./emsdk_env.sh
 
-No retail Portal data is committed to this repository.
+cd /source-engine
 
-The staging page verifies a user-selected Portal installation locally. Runtime map data can then come from either:
+# patch and rebuild sdl2
+embuilder --pic build sdl2 sdl2-mt
+sed -Ei 's/freq = EM_ASM_INT/freq = MAIN_THREAD_EM_ASM_INT/' /emsdk/upstream/emscripten/cache/ports/sdl2/SDL-release-2.32.0/src/audio/emscripten/SDL_emscriptenaudio.c
+embuilder --force --pic build sdl2 sdl2-mt
 
-1. locally generated chunks built from the selected Portal VPKs and kept in browser Cache Storage; or
-2. the original upstream packed-data route when that host is accessible.
+# patch glMapBufferRange to allow some "unsupported" parameters
+patch /emsdk/upstream/emscripten/src/lib/libwebgl.js emscripten/libwebgl.patch
 
-The local VPK path reads only the required archive ranges with `File.slice()` and repacks them into the same record format expected by the original Source DataLoader.
+emmake ./build_emscripten.sh
+```
+then download packed game data (yikes.pw/portal/chunks/mapName.data for each map) and put it to ./build/install/chunks/
 
-Native game binaries (`.dll`, `.so`, `.dylib`, `.exe`) are never copied from the retail game into generated browser chunks. Emscripten `.so` SIDE_MODULEs are produced by the WebAssembly build itself and CI verifies their `\0asm` magic before Pages deployment.
+## packing game data
+first of all, you'll need to build engine from https://github.com/nillerusr/source-engine for your native arch
 
-## iPhone browser compatibility hardening
+and after that you should add that printf to ./filesystem/basefilesystem.cpp, to dump all files that engine would access (textures/models that map needs)
 
-The staging lane deliberately avoids changing the Source renderer architecture. Browser-specific fixes are limited to host/runtime boundaries:
+```cpp
+FileHandle_t CBaseFileSystem::OpenForRead( const char *pFileNameT, const char *pOptions, unsigned flags, const char *pathID, char **ppszResolvedFilename )
+{
+	printf("OpenForRead %s %s\n", pFileNameT, pathID);
+	VPROF( "CBaseFileSystem::OpenForRead" );
+```
 
-- Safari fullscreen uses the browser canvas API directly and falls back to inline/standalone mode when element fullscreen is unavailable.
-- Portal starts with `-novid` and `-nojoy` to avoid unsupported startup/video/controller paths.
-- Desktop-only optional modules such as `sourcevr`, Bink/WebM video backends, and pre-DX9/debug shader modules are skipped before `dlopen()` on Emscripten, preventing Safari from feeding 404/HTML/native files into the Wasm dynamic linker.
-- Required browser modules (`filesystem_stdio`, `engine`, `materialsystem`, `shaderapidx9`, `stdshader_dx9`) must exist and be valid WebAssembly before deployment.
-- The build script validates the generated C++ optional-module patch before the full Source compile so escaping regressions fail immediately with a useful message.
+and lauch it via emscripten/get_logs.sh script, make sure to edit map list
 
-## Merge gate
+after that, use emscripten/repackage.js script to make .data chunks
 
-The staging PR remains draft until an actual iPhone run reaches a visible Portal frame, or the remaining failure has been reduced to a single reproducible WebKit/ToGL incompatibility.
+edit `knownMaps` and `baseGamePath` variables, make sure to unpack all .vpks
