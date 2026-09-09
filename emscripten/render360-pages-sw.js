@@ -9,10 +9,10 @@
  *   1. chunks generated locally from the user's selected Portal/VPK files, or
  *   2. the original yikes.pw packed-data host when CORS allows it.
  *
- * Mutable engine assets (.js/.wasm/.so/.html) are always fetched network-first
- * with cache:no-store. The filenames stay stable between Pages deployments, and
- * mixing an old Emscripten glue file with new SIDE_MODULEs (or vice versa) can
- * produce misleading dylink/DataView failures on Safari.
+ * Mutable engine assets (.js/.wasm/.so/.html and the generated launcher .data
+ * package containing runtime SIDE_MODULEs) are always fetched network-first
+ * with cache:no-store. Chunk .data requests are handled separately above.
+ * Stable filenames must never mix across Pages deployments on Safari.
  *
  * No retail game data is committed to GitHub Pages.
  */
@@ -21,7 +21,7 @@ const LOCAL_CHUNK_CACHE = 'render360-portal-local-chunks-v2';
 const OLD_LOCAL_CHUNK_CACHE = 'render360-portal-local-chunks-v1';
 const UPSTREAM_CHUNK_BASE = 'https://yikes.pw/portal/chunks/';
 const UPSTREAM_TIMEOUT_MS = 8000;
-const MUTABLE_RUNTIME_RE = /\.(?:html?|js|mjs|wasm|so|json)$/i;
+const MUTABLE_RUNTIME_RE = /\.(?:html?|js|mjs|wasm|so|json|data)$/i;
 
 // This staging revision changes how Source handles optional desktop .so modules.
 // Force one clean VPK-cache rebuild when the new worker activates so an iPhone
