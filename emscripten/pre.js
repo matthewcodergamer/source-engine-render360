@@ -4,6 +4,8 @@ Module['arguments'].push(
 	'-noip',
 	'-language', 'english',
 	'-windowed',
+	'-novid',
+	'-nojoy',
 	'+mat_hdr_level', '0',
 	'+mat_colorcorrection', '1'
 )
@@ -36,15 +38,15 @@ class DataLoader {
 			throw new Error(`no such map: ${mapName}`)
 		}
 
-		// load past maps and current one
 		for(let i = 0; i < index + 1; i++) {
 			await this.loadMapCached(this.mapsOrdered[i])
 		}
 
-		// schedule next map if it exists
 		const next = this.mapsOrdered[index + 1]
 		if(next) {
-			this.loadMapCached(next)
+			this.loadMapCached(next).catch(error => {
+				Module.printErr?.(`[Render360] background preload failed for ${next}: ${error?.stack || error}`)
+			})
 		}
 	}
 
@@ -58,9 +60,9 @@ class DataLoader {
 	async setProgress(mapName, progress) {
 		if(progress < 1) {
 			spinnerElement.style.display = ''
-			statusElement.innerText = `Downloading map ${mapName}`
+			statusElement.innerText = `Loading map data ${mapName}`
 			progressElement.hidden = false
-			progressElement.value = progress
+			progressElement.value = Number.isFinite(progress) ? progress : 0
 		} else {
 			spinnerElement.style.display = 'none'
 			statusElement.innerText = ''
@@ -77,43 +79,67 @@ class DataLoader {
 		const xhr = new XMLHttpRequest()
 		xhr.responseType = 'arraybuffer'
 		xhr.onprogress = e => {
-			this.setProgress(mapName, e.loaded / e.total)
+			this.setProgress(mapName, e.lengthComputable && e.total > 0 ? e.loaded / e.total : 0)
 		}
 
 		xhr.onerror = () => {
-			reject(new Error(`cannot load map ${mapName}`))
+			reject(new Error(`cannot load map ${mapName}: network error`))
 		}
 
-		xhr.onload = e => {
-			this.setProgress(mapName, 1)
-			const dv = new DataView(xhr.response)
+		xhr.onload = () => {
+			try {
+				if(xhr.status < 200 || xhr.status >= 300) {
+					throw new Error(`cannot load map ${mapName}: HTTP ${xhr.status}`)
+				}
+				if(!(xhr.response instanceof ArrayBuffer)) {
+					throw new Error(`cannot load map ${mapName}: response is not binary data`)
+				}
 
-			let offset = 0
-			
-			// data format: { pathLen: uint32le, dataLen: uint32le, path: bytes, blob: bytes }[]
-			while(offset < dv.byteLength) {
-				const pathLen = dv.getInt32(offset, true)
-				const dataLen = dv.getInt32(offset + 4, true)
-				const path = new TextDecoder().decode(new DataView(
-					dv.buffer,
-					offset + 8,
-					pathLen
-				))
-				const blob = new Uint8Array(
-					dv.buffer,
-					offset + 8 + pathLen,
-					dataLen
-				)
-				offset += 8 + pathLen + dataLen
+				const dv = new DataView(xhr.response)
+				let offset = 0
+				let fileCount = 0
 
-				const dir = path.replace(/\/[^\/]+$/, '')
-				FS.mkdirTree(dir)
-				FS.writeFile(path, blob)
+				// data format: { pathLen: uint32le, dataLen: uint32le, path: bytes, blob: bytes }[]
+				while(offset < dv.byteLength) {
+					if(dv.byteLength - offset < 8) {
+						throw new Error(`corrupt ${mapName}.data: truncated record header at ${offset}/${dv.byteLength}`)
+					}
+					const pathLen = dv.getUint32(offset, true)
+					const dataLen = dv.getUint32(offset + 4, true)
+					const recordEnd = offset + 8 + pathLen + dataLen
+					if(pathLen === 0 || pathLen > 1024 * 1024 || recordEnd > dv.byteLength) {
+						throw new Error(`corrupt ${mapName}.data: record ${fileCount} exceeds buffer (${recordEnd}/${dv.byteLength})`)
+					}
+
+					const path = new TextDecoder().decode(new Uint8Array(dv.buffer, offset + 8, pathLen))
+					const blob = new Uint8Array(dv.buffer, offset + 8 + pathLen, dataLen)
+					offset = recordEnd
+					fileCount++
+
+					// Game-data chunks must never supply native executables/shared libraries.
+					// Emscripten SIDE_MODULE .so files are built and shipped with the runtime,
+					// not sourced from Portal retail/VPK data.
+					if(/\.(?:dll|dylib|exe|so)$/i.test(path)) {
+						Module.printErr?.(`[Render360] ignored native binary from game-data chunk: ${path}`)
+						continue
+					}
+
+					const dir = path.replace(/\/[^\/]+$/, '')
+					FS.mkdirTree(dir)
+					FS.writeFile(path, blob)
+				}
+
+				this.setProgress(mapName, 1)
+				Module.print?.(`[Render360] loaded ${mapName}.data: ${fileCount} records, ${dv.byteLength} bytes`)
+				resolve()
+			} catch(error) {
+				this.setProgress(mapName, 1)
+				Module.printErr?.(`[Render360] ${error?.stack || error}`)
+				reject(error)
 			}
-
-			resolve()
 		}
 		xhr.open('GET', `chunks/${mapName}.data`, true)
+		xhr.setRequestHeader('Cache-Control', 'no-cache')
 		xhr.send()
 
 		return promise
@@ -124,6 +150,12 @@ const dataLoader = new DataLoader()
 
 Module.downloadMap = (lock, mapName) => {
 	dataLoader.loadMapWithDeps(mapName).then(() => {
+		Atomics.store(HEAP32, lock, 0)
+		Atomics.notify(HEAP32, lock)
+	}).catch(error => {
+		Module.printErr?.(`[Render360] map dependency load failed for ${mapName}: ${error?.stack || error}`)
+		// Do not leave the Source pthread asleep forever. Wake it so the engine can
+		// surface the real missing-map/file error in its own startup path.
 		Atomics.store(HEAP32, lock, 0)
 		Atomics.notify(HEAP32, lock)
 	})
