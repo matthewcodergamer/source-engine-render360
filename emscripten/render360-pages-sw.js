@@ -11,11 +11,11 @@
  * is only the fallback when the original host cannot be reached.
  *
  * The tiny user-generated Source boot overlay is deliberately served as its
- * own response. Earlier revisions appended it to background1.data with a
- * synthetic ReadableStream. iOS Safari could successfully probe that response
- * as HTTP 200 and then fail the full ~220 MiB XHR mid-stream with a network
- * error. The runtime now loads the base chunk first, then fetches the <1 MiB
- * overlay separately and writes those records into MEMFS.
+ * own response and lives in its own Cache Storage bucket. Earlier revisions
+ * appended it to background1.data with a synthetic ReadableStream, and later
+ * revisions put it in the same cache the map builder clears before rebuilding.
+ * Both paths could make iOS Safari lose the overlay between verification and
+ * launch. Keeping it separate makes the verified Portal-folder state stable.
  *
  * Mutable engine assets (.js/.wasm/.so/.html and the generated launcher .data
  * package containing runtime SIDE_MODULEs) are always fetched network-first
@@ -26,6 +26,7 @@
 
 const LOCAL_CHUNK_CACHE = 'render360-portal-local-chunks-v2';
 const OLD_LOCAL_CHUNK_CACHE = 'render360-portal-local-chunks-v1';
+const BOOT_OVERLAY_CACHE = 'render360-portal-boot-overlay-v1';
 const BOOT_OVERLAY_PATH = './render360-bootstrap-overlay.data';
 const UPSTREAM_CHUNK_BASE = 'https://yikes.pw/portal/chunks/';
 const UPSTREAM_TIMEOUT_MS = 8000;
@@ -145,7 +146,7 @@ async function servePortalChunk(request, url) {
 }
 
 async function serveBootOverlay() {
-  const cache = await caches.open(LOCAL_CHUNK_CACHE);
+  const cache = await caches.open(BOOT_OVERLAY_CACHE);
   const overlayUrl = new URL(BOOT_OVERLAY_PATH, self.location.href).href;
   const overlay = await cache.match(overlayUrl, { ignoreSearch: true });
   if (!overlay || !overlay.ok) {
