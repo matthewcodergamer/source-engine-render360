@@ -63,14 +63,19 @@ jobs:
           grep -q 'Portal JS exception' emscripten/shell.html
           grep -q 'libsourcevr.so' emscripten/build.sh
           grep -q 'libstdshader_dx9.so' emscripten/build.sh
-          grep -q 'json|data' emscripten/render360-pages-sw.js
+          grep -q 'BOOT_OVERLAY_PATH' emscripten/render360-pages-sw.js
+          grep -q 'local-boot' emscripten/render360-pages-sw.js
 
       - name: Validate dual-source staging JavaScript
         shell: bash
         run: |
           set -euo pipefail
           node --check emscripten/portal-local-vpk.js
+          node --check emscripten/portal-boot-overlay.js
           node --check emscripten/render360-pages-sw.js
+          grep -q 'debugluxelsnoalpha.vtf' emscripten/portal-boot-overlay.js
+          grep -q 'identitylightwarp.vtf' emscripten/portal-boot-overlay.js
+          grep -q 'normalizedrandomdirections2d.vtf' emscripten/portal-boot-overlay.js
           python3 - <<'PY'
           import re
           from pathlib import Path
@@ -113,6 +118,7 @@ jobs:
           grep -a -q 'libengine.so' build/install/hl2_launcher.js
           grep -a -q 'libfilesystem_stdio.so' build/install/hl2_launcher.js
           test -s emscripten/portal-local-vpk.js
+          test -s emscripten/portal-boot-overlay.js
           grep -q 'Portal JS exception' build/install/hl2_launcher.html
           grep -q 'chunks/${mapName}.data' emscripten/pre.js
 
@@ -128,6 +134,7 @@ jobs:
           cp emscripten/pages-index.html build/install/index.html
           cp emscripten/render360-pages-sw.js build/install/render360-pages-sw.js
           cp emscripten/portal-local-vpk.js build/install/portal-local-vpk.js
+          cp emscripten/portal-boot-overlay.js build/install/portal-boot-overlay.js
 
           # background1 becomes available before the remaining chamber chunks
           # finish packing. Do not let the iPhone launch midway through the local
@@ -135,21 +142,68 @@ jobs:
           # Also force Safari to update the isolation worker without HTTP cache
           # and give every launcher document navigation a unique URL. This stops
           # an old generated shell/glue/data set from surviving across Pages deploys.
+          # The tiny VPK boot overlay is mandatory for launch because the historical
+          # upstream background chunk can omit shared Source engine textures.
           python3 - <<'PY'
           from pathlib import Path
           path = Path('build/install/index.html')
           text = path.read_text()
 
-          old = 'const ready=threadReady&&runtimeReady&&verified&&chunk.ok;'
-          new = 'const ready=threadReady&&runtimeReady&&verified&&chunk.ok&&!buildingLocal;'
+          old = '<script src="./portal-local-vpk.js"></script>'
+          new = old + '\n<script src="./portal-boot-overlay.js"></script>'
           if old not in text:
-              raise SystemExit('Render360 Portal: staging launch readiness expression changed unexpectedly')
+              raise SystemExit('Render360 Portal: local VPK script tag changed unexpectedly')
           text = text.replace(old, new, 1)
 
           old = "const registration=await navigator.serviceWorker.register('./render360-pages-sw.js',{scope:'./'});"
           new = "const registration=await navigator.serviceWorker.register('./render360-pages-sw.js',{scope:'./',updateViaCache:'none'});await registration.update();"
           if old not in text:
               raise SystemExit('Render360 Portal: service-worker registration changed unexpectedly')
+          text = text.replace(old, new, 1)
+
+          old = """        $('buildLocal').disabled=!selectedFromFolder;
+          await refresh(false);
+          if(!lastChunkProbe.ok&&selectedFromFolder)await buildLocalFallback(true);"""
+          new = """        $('buildLocal').disabled=!selectedFromFolder;
+          $('launch').disabled=true;
+          if(selectedFromFolder&&globalThis.Render360PortalBootOverlay){
+            try{
+              const boot=await Render360PortalBootOverlay.build(selectedPortalFiles,{log});
+              log('Local VPK boot overlay complete:',boot);
+            }catch(error){
+              log('Local VPK boot overlay failed:',error?.stack||String(error));
+            }
+          }
+          await refresh(false);
+          if(!lastChunkProbe.ok&&selectedFromFolder)await buildLocalFallback(true);"""
+          if old not in text:
+              raise SystemExit('Render360 Portal: ownership-success flow changed unexpectedly')
+          text = text.replace(old, new, 1)
+
+          old = """    const localReady=await localChunkReady();
+          if(localReady)set('localStatus',true,'ready from your VPKs');"""
+          new = """    const localReady=await localChunkReady();
+          const bootReady=!!globalThis.Render360PortalBootOverlay&&await Render360PortalBootOverlay.hasOverlay();
+          if(localReady)set('localStatus',true,'ready from your VPKs');"""
+          if old not in text:
+              raise SystemExit('Render360 Portal: local readiness block changed unexpectedly')
+          text = text.replace(old, new, 1)
+
+          old = 'const ready=threadReady&&runtimeReady&&verified&&chunk.ok;'
+          new = 'const ready=threadReady&&runtimeReady&&verified&&chunk.ok&&bootReady&&!buildingLocal;'
+          if old not in text:
+              raise SystemExit('Render360 Portal: staging launch readiness expression changed unexpectedly')
+          text = text.replace(old, new, 1)
+
+          old = """    if(!verified)$('launchHint').textContent='Verify your Portal folder first.';
+          else if(!threadReady||!runtimeReady)$('launchHint').textContent='Portal is verified, but the threaded Pages runtime is not ready.';
+          else if(chunk.ok&&chunk.source==='local-vpk')"""
+          new = """    if(!verified)$('launchHint').textContent='Verify your Portal folder first.';
+          else if(!threadReady||!runtimeReady)$('launchHint').textContent='Portal is verified, but the threaded Pages runtime is not ready.';
+          else if(!bootReady)$('launchHint').textContent='Choose the full Portal folder once to prepare the shared Source boot textures required before the first frame.';
+          else if(chunk.ok&&chunk.source==='local-vpk')"""
+          if old not in text:
+              raise SystemExit('Render360 Portal: launch hint block changed unexpectedly')
           text = text.replace(old, new, 1)
 
           old = "$('launch').addEventListener('click',()=>{location.href='./hl2_launcher.html'});"
@@ -160,7 +214,10 @@ jobs:
 
           path.write_text(text)
           PY
-          grep -q 'chunk.ok&&!buildingLocal' build/install/index.html
+          grep -q 'portal-boot-overlay.js' build/install/index.html
+          grep -q 'Render360PortalBootOverlay.build' build/install/index.html
+          grep -q 'Render360PortalBootOverlay.hasOverlay' build/install/index.html
+          grep -q 'chunk.ok&&bootReady&&!buildingLocal' build/install/index.html
           grep -q "updateViaCache:'none'" build/install/index.html
           grep -q "registration.update()" build/install/index.html
           grep -q "hl2_launcher.html?render360=" build/install/index.html
@@ -176,6 +233,7 @@ jobs:
             "initialMemoryMiB": 512,
             "maximumMemoryMiB": 1536,
             "memoryGrowth": true,
+            "bootAssetOverlay": "selected-portal-vpk",
             "diagnostics": true,
             "pagesIsolation": "service-worker-staging-only",
             "runtimeChunkPath": "chunks/<map>.data",
