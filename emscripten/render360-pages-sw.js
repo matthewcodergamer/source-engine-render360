@@ -10,12 +10,11 @@
  * Source engine's real OpenForRead trace/order. A locally generated VPK chunk
  * is only the fallback when the original host cannot be reached.
  *
- * The tiny user-generated Source boot overlay is deliberately served as its
- * own response and lives in its own Cache Storage bucket. Earlier revisions
- * appended it to background1.data with a synthetic ReadableStream, and later
- * revisions put it in the same cache the map builder clears before rebuilding.
- * Both paths could make iOS Safari lose the overlay between verification and
- * launch. Keeping it separate makes the verified Portal-folder state stable.
+ * The user-generated Source boot overlay is deliberately served as its own
+ * response and lives in its own Cache Storage bucket. v2 also contains the
+ * retail Source .vcs shader cache needed by libstdshader_dx9 before the first
+ * rendered frame. Keeping it separate avoids rebuilding hundreds of MiB of map
+ * chunks just to refresh bootstrap material/shader resources.
  *
  * Mutable engine assets (.js/.wasm/.so/.html and the generated launcher .data
  * package containing runtime SIDE_MODULEs) are always fetched network-first
@@ -26,19 +25,17 @@
 
 const LOCAL_CHUNK_CACHE = 'render360-portal-local-chunks-v2';
 const OLD_LOCAL_CHUNK_CACHE = 'render360-portal-local-chunks-v1';
-const BOOT_OVERLAY_CACHE = 'render360-portal-boot-overlay-v1';
+const BOOT_OVERLAY_CACHE = 'render360-portal-boot-overlay-v2';
+const OLD_BOOT_OVERLAY_CACHE = 'render360-portal-boot-overlay-v1';
 const BOOT_OVERLAY_PATH = './render360-bootstrap-overlay.data';
 const UPSTREAM_CHUNK_BASE = 'https://yikes.pw/portal/chunks/';
 const UPSTREAM_TIMEOUT_MS = 8000;
 const UPSTREAM_RETRY_COOLDOWN_MS = 60000;
 const MUTABLE_RUNTIME_RE = /\.(?:html?|js|mjs|wasm|so|json|data)$/i;
 
-// Never delete the current local cache merely because a new service worker
+// Never delete the current local map cache merely because a new service worker
 // activates. The iPhone staging page can spend minutes building chunks from
-// user-selected VPKs; deleting that same cache during the launcher navigation
-// makes the following /chunks/background1.data request fall through to the
-// network and look like an extraction/RAM failure. Schema changes should bump
-// LOCAL_CHUNK_CACHE instead.
+// user-selected VPKs; schema changes should bump LOCAL_CHUNK_CACHE instead.
 const REBUILD_LOCAL_CHUNKS_ON_ACTIVATE = false;
 let upstreamUnavailableUntil = 0;
 
@@ -48,7 +45,13 @@ self.addEventListener('install', event => {
 
 self.addEventListener('activate', event => {
   event.waitUntil((async () => {
-    await caches.delete(OLD_LOCAL_CHUNK_CACHE);
+    await Promise.all([
+      caches.delete(OLD_LOCAL_CHUNK_CACHE),
+      // Invalidate the old 18-record texture-only overlay. A stale v1 overlay
+      // would otherwise let the page say "boot ready" while Source still lacks
+      // shaders/fxc/*.vcs and aborts at vertexlit_and_unlit_generic_*.
+      caches.delete(OLD_BOOT_OVERLAY_CACHE)
+    ]);
     if (REBUILD_LOCAL_CHUNKS_ON_ACTIVATE) {
       await caches.delete(LOCAL_CHUNK_CACHE);
       console.info('[Render360 Pages SW] cleared local Portal chunks for clean runtime rebuild');
@@ -63,6 +66,12 @@ self.addEventListener('message', event => {
     event.waitUntil(Promise.all([
       caches.delete(LOCAL_CHUNK_CACHE),
       caches.delete(OLD_LOCAL_CHUNK_CACHE)
+    ]));
+  }
+  if (event.data.type === 'RENDER360_CLEAR_BOOT_OVERLAY') {
+    event.waitUntil(Promise.all([
+      caches.delete(BOOT_OVERLAY_CACHE),
+      caches.delete(OLD_BOOT_OVERLAY_CACHE)
     ]));
   }
 });
@@ -150,7 +159,7 @@ async function serveBootOverlay() {
   const overlayUrl = new URL(BOOT_OVERLAY_PATH, self.location.href).href;
   const overlay = await cache.match(overlayUrl, { ignoreSearch: true });
   if (!overlay || !overlay.ok) {
-    return withIsolationHeaders(new Response('Render360 local boot overlay not prepared', {
+    return withIsolationHeaders(new Response('Render360 local boot/shader overlay not prepared', {
       status: 404,
       headers: { 'Content-Type': 'text/plain; charset=utf-8' }
     }), {
@@ -162,7 +171,7 @@ async function serveBootOverlay() {
   return withIsolationHeaders(overlay, {
     'Content-Type': 'application/octet-stream',
     'Cache-Control': 'no-store, max-age=0',
-    'X-Render360-Chunk-Source': 'local-boot-overlay'
+    'X-Render360-Chunk-Source': 'local-boot-overlay-v2'
   });
 }
 
