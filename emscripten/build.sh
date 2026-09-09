@@ -174,7 +174,14 @@ done
 # Wasm memory pressure at large fixed/max sizes. Start at 512 MiB and grow in
 # 64 MiB steps only as Source actually needs memory, with a 1536 MiB ceiling.
 # This preserves pthreads/SharedArrayBuffer while avoiding a giant eager heap.
-EMCC_FORCE_STDLIBS=1 emcc \
+#
+# Runtime dlopen means the main module must carry the C/C++ runtime symbols that
+# SIDE_MODULEs can request. Emscripten documents EMCC_FORCE_STDLIBS=1 as the
+# broad fallback, but that also force-links unrelated optional system libraries.
+# With this pinned SDK that drags WebGPU/Dawn references such as
+# wgpuTextureViewRelease/wgpuTextureViewSetLabel into a ToGL/WebGL build and the
+# final link aborts. Force only Source's core C/C++ runtime libraries instead.
+EMCC_FORCE_STDLIBS=libc,libcxx,libcxxabi emcc \
 	-sUSE_BZIP2=1 -sUSE_SDL=2 -sUSE_FREETYPE=1 -sUSE_LIBJPEG=1 -sUSE_LIBPNG -sMALLOC=mimalloc \
 	-sMAIN_MODULE -sINCLUDE_FULL_LIBRARY=1 \
 	-sINITIAL_MEMORY=512mb -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=1536mb -sMEMORY_GROWTH_LINEAR_STEP=64mb \
