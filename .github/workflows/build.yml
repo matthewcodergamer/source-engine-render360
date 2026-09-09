@@ -49,7 +49,7 @@ jobs:
           grep -q -- '-sMAXIMUM_MEMORY=1536mb' emscripten/build.sh
           grep -q -- '-sMEMORY_GROWTH_LINEAR_STEP=64mb' emscripten/build.sh
           grep -q -- '--preload-file' emscripten/build.sh
-          grep -q 'EMCC_FORCE_STDLIBS=1' emscripten/build.sh
+          grep -Fq 'EMCC_FORCE_STDLIBS=libc,libc++,libc++abi' emscripten/build.sh
           if grep -q 'link_libs=' emscripten/build.sh; then
             echo 'Render360 Portal: SIDE_MODULEs were returned to load-time linking; Source requires runtime dlopen.' >&2
             exit 1
@@ -136,84 +136,87 @@ jobs:
           cp emscripten/portal-local-vpk.js build/install/portal-local-vpk.js
           cp emscripten/portal-boot-overlay.js build/install/portal-boot-overlay.js
 
-          # background1 becomes available before the remaining chamber chunks
-          # finish packing. Do not let the iPhone launch midway through the local
-          # VPK build just because the initial chunk probe already succeeds.
-          # Also force Safari to update the isolation worker without HTTP cache
-          # and give every launcher document navigation a unique URL. This stops
-          # an old generated shell/glue/data set from surviving across Pages deploys.
-          # The tiny VPK boot overlay is mandatory for launch because the historical
-          # upstream background chunk can omit shared Source engine textures.
+          # Patch the generic staging page into the iPhone runtime page. Keep
+          # indentation inside Python string literals explicit: YAML removes the
+          # block-scalar indentation before the script reaches Python, which made
+          # the previous triple-quoted multiline probes silently lose spaces and
+          # fail even though the HTML was correct.
           python3 - <<'PY'
           from pathlib import Path
           path = Path('build/install/index.html')
           text = path.read_text()
 
+          def replace_once(old, new, label):
+              global text
+              if old not in text:
+                  raise SystemExit(f'Render360 Portal: {label} changed unexpectedly')
+              text = text.replace(old, new, 1)
+
           old = '<script src="./portal-local-vpk.js"></script>'
-          new = old + '\n<script src="./portal-boot-overlay.js"></script>'
-          if old not in text:
-              raise SystemExit('Render360 Portal: local VPK script tag changed unexpectedly')
-          text = text.replace(old, new, 1)
+          replace_once(old, old + '\n<script src="./portal-boot-overlay.js"></script>', 'local VPK script tag')
 
           old = "const registration=await navigator.serviceWorker.register('./render360-pages-sw.js',{scope:'./'});"
           new = "const registration=await navigator.serviceWorker.register('./render360-pages-sw.js',{scope:'./',updateViaCache:'none'});await registration.update();"
-          if old not in text:
-              raise SystemExit('Render360 Portal: service-worker registration changed unexpectedly')
-          text = text.replace(old, new, 1)
+          replace_once(old, new, 'service-worker registration')
 
-          old = """        $('buildLocal').disabled=!selectedFromFolder;
-          await refresh(false);
-          if(!lastChunkProbe.ok&&selectedFromFolder)await buildLocalFallback(true);"""
-          new = """        $('buildLocal').disabled=!selectedFromFolder;
-          $('launch').disabled=true;
-          if(selectedFromFolder&&globalThis.Render360PortalBootOverlay){
-            try{
-              const boot=await Render360PortalBootOverlay.build(selectedPortalFiles,{log});
-              log('Local VPK boot overlay complete:',boot);
-            }catch(error){
-              log('Local VPK boot overlay failed:',error?.stack||String(error));
-            }
-          }
-          await refresh(false);
-          if(!lastChunkProbe.ok&&selectedFromFolder)await buildLocalFallback(true);"""
-          if old not in text:
-              raise SystemExit('Render360 Portal: ownership-success flow changed unexpectedly')
-          text = text.replace(old, new, 1)
+          old = (
+              "        $('buildLocal').disabled=!selectedFromFolder;\n"
+              "        await refresh(false);\n"
+              "        if(!lastChunkProbe.ok&&selectedFromFolder)await buildLocalFallback(true);"
+          )
+          new = (
+              "        $('buildLocal').disabled=!selectedFromFolder;\n"
+              "        $('launch').disabled=true;\n"
+              "        if(selectedFromFolder&&globalThis.Render360PortalBootOverlay){\n"
+              "          try{\n"
+              "            const boot=await Render360PortalBootOverlay.build(selectedPortalFiles,{log});\n"
+              "            log('Local VPK boot overlay complete:',boot);\n"
+              "          }catch(error){\n"
+              "            log('Local VPK boot overlay failed:',error?.stack||String(error));\n"
+              "          }\n"
+              "        }\n"
+              "        await refresh(false);\n"
+              "        if(!lastChunkProbe.ok&&selectedFromFolder)await buildLocalFallback(true);"
+          )
+          replace_once(old, new, 'ownership-success flow')
 
-          old = """    const localReady=await localChunkReady();
-          if(localReady)set('localStatus',true,'ready from your VPKs');"""
-          new = """    const localReady=await localChunkReady();
-          const bootReady=!!globalThis.Render360PortalBootOverlay&&await Render360PortalBootOverlay.hasOverlay();
-          if(localReady)set('localStatus',true,'ready from your VPKs');"""
-          if old not in text:
-              raise SystemExit('Render360 Portal: local readiness block changed unexpectedly')
-          text = text.replace(old, new, 1)
+          old = (
+              "    const localReady=await localChunkReady();\n"
+              "    if(localReady)set('localStatus',true,'ready from your VPKs');"
+          )
+          new = (
+              "    const localReady=await localChunkReady();\n"
+              "    const bootReady=!!globalThis.Render360PortalBootOverlay&&await Render360PortalBootOverlay.hasOverlay();\n"
+              "    if(localReady)set('localStatus',true,'ready from your VPKs');"
+          )
+          replace_once(old, new, 'local readiness block')
 
-          old = 'const ready=threadReady&&runtimeReady&&verified&&chunk.ok;'
-          new = 'const ready=threadReady&&runtimeReady&&verified&&chunk.ok&&bootReady&&!buildingLocal;'
-          if old not in text:
-              raise SystemExit('Render360 Portal: staging launch readiness expression changed unexpectedly')
-          text = text.replace(old, new, 1)
+          replace_once(
+              'const ready=threadReady&&runtimeReady&&verified&&chunk.ok;',
+              'const ready=threadReady&&runtimeReady&&verified&&chunk.ok&&bootReady&&!buildingLocal;',
+              'staging launch readiness expression'
+          )
 
-          old = """    if(!verified)$('launchHint').textContent='Verify your Portal folder first.';
-          else if(!threadReady||!runtimeReady)$('launchHint').textContent='Portal is verified, but the threaded Pages runtime is not ready.';
-          else if(chunk.ok&&chunk.source==='local-vpk')"""
-          new = """    if(!verified)$('launchHint').textContent='Verify your Portal folder first.';
-          else if(!threadReady||!runtimeReady)$('launchHint').textContent='Portal is verified, but the threaded Pages runtime is not ready.';
-          else if(!bootReady)$('launchHint').textContent='Choose the full Portal folder once to prepare the shared Source boot textures required before the first frame.';
-          else if(chunk.ok&&chunk.source==='local-vpk')"""
-          if old not in text:
-              raise SystemExit('Render360 Portal: launch hint block changed unexpectedly')
-          text = text.replace(old, new, 1)
+          old = (
+              "    if(!verified)$('launchHint').textContent='Verify your Portal folder first.';\n"
+              "    else if(!threadReady||!runtimeReady)$('launchHint').textContent='Portal is verified, but the threaded Pages runtime is not ready.';\n"
+              "    else if(chunk.ok&&chunk.source==='local-vpk')"
+          )
+          new = (
+              "    if(!verified)$('launchHint').textContent='Verify your Portal folder first.';\n"
+              "    else if(!threadReady||!runtimeReady)$('launchHint').textContent='Portal is verified, but the threaded Pages runtime is not ready.';\n"
+              "    else if(!bootReady)$('launchHint').textContent='Choose the full Portal folder once to prepare the shared Source boot textures required before the first frame.';\n"
+              "    else if(chunk.ok&&chunk.source==='local-vpk')"
+          )
+          replace_once(old, new, 'launch hint block')
 
           old = "$('launch').addEventListener('click',()=>{location.href='./hl2_launcher.html'});"
           new = "$('launch').addEventListener('click',()=>{location.href='./hl2_launcher.html?render360='+Date.now()});"
-          if old not in text:
-              raise SystemExit('Render360 Portal: launcher navigation changed unexpectedly')
-          text = text.replace(old, new, 1)
+          replace_once(old, new, 'launcher navigation')
 
           path.write_text(text)
           PY
+
           grep -q 'portal-boot-overlay.js' build/install/index.html
           grep -q 'Render360PortalBootOverlay.build' build/install/index.html
           grep -q 'Render360PortalBootOverlay.hasOverlay' build/install/index.html
