@@ -38,11 +38,17 @@ jobs:
           test -f emscripten/build.sh
           grep -q -- '-sSHARED_MEMORY=1' emscripten/build.sh
           grep -q -- '-sUSE_PTHREADS' emscripten/build.sh
-          grep -q -- '-sPTHREAD_POOL_SIZE=8' emscripten/build.sh
+          grep -q -- '-sPTHREAD_POOL_SIZE=navigator.hardwareConcurrency' emscripten/build.sh
+          grep -q -- '-sPTHREAD_POOL_SIZE_STRICT=0' emscripten/build.sh
           grep -q -- '-sPROXY_TO_PTHREAD' emscripten/build.sh
           grep -q -- '-sOFFSCREENCANVASES_TO_PTHREAD' emscripten/build.sh
           grep -q -- '-sMAIN_MODULE' emscripten/build.sh
           grep -q 'Atomics.store' emscripten/pre.js
+          grep -q 'Do not speculatively load' emscripten/pre.js
+          if grep -q 'background preload failed' emscripten/pre.js; then
+            echo 'Render360 Portal: speculative next-map preload returned unexpectedly.' >&2
+            exit 1
+          fi
           grep -q 'Portal JS exception' emscripten/shell.html
           grep -q 'libsourcevr.so' emscripten/build.sh
           grep -q 'libstdshader_dx9.so' emscripten/build.sh
