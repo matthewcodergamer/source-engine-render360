@@ -29,8 +29,8 @@ pattern = re.compile(
     re.S,
 )
 replacement = r'''\1#ifdef __EMSCRIPTEN__
-	// Emscripten SIDE_MODULEs are linked into the runtime by basename. Normalize
-	// absolute/relative Source module names to the linked lib*.so name first.
+	// Emscripten SIDE_MODULEs are loaded at runtime by basename from MEMFS.
+	// Normalize absolute/relative Source module names to lib*.so first.
 	const char *pBaseName = strrchr(pModuleName, '/');
 	if(!pBaseName) pBaseName = strrchr(pModuleName, '\\');
 	pBaseName = pBaseName ? pBaseName + 1 : pModuleName;
@@ -157,27 +157,34 @@ done
 
 echo "Render360 Portal: required filesystem/engine/ToGL module set present"
 
-#link_libs="-sERROR_ON_UNDEFINED_SYMBOLS=0"
+# Source uses dlopen()/dlsym() itself. Emscripten's documented runtime-dylink
+# mode says not to pass SIDE_MODULEs on the main-module link command; doing so
+# autoloads every library before Source later dlopens it and is what produced the
+# repeated __start_em_asm/__stop_em_asm duplicate-symbol warnings on iPhone.
+# Put the Wasm .so files in MEMFS instead, so each Source dlopen loads the module
+# once, on demand, through the handle Source expects.
+preload_libs=""
 for lib in build/install/*.so; do
-	libname=$(echo $lib | sed -E 's/^.+\/lib(.+)\.so/\1/g')
-	link_libs="$link_libs -l$libname"
+	base=$(basename "$lib")
+	preload_libs="$preload_libs --preload-file $lib@/$base"
 done
 
-# Source is already proxied off the browser main thread. Let Emscripten size the
-# warm pthread pool to the device instead of forcing eight Workers on every
-# iPhone, and allow on-demand Workers if Source briefly exceeds that pool.
-# PTHREAD_POOL_SIZE_STRICT=2 turns pool exhaustion into a hard runtime failure;
-# that is exactly the wrong failure mode for this off-the-shelf engine port.
-emcc \
+# The old 2047 MiB fixed shared heap reserved essentially the entire Wasm32
+# address-space ceiling at startup. Safari/WebKit has a long history of shared
+# Wasm memory pressure at large fixed/max sizes. Start at 512 MiB and grow in
+# 64 MiB steps only as Source actually needs memory, with a 1536 MiB ceiling.
+# This preserves pthreads/SharedArrayBuffer while avoiding a giant eager heap.
+EMCC_FORCE_STDLIBS=1 emcc \
 	-sUSE_BZIP2=1 -sUSE_SDL=2 -sUSE_FREETYPE=1 -sUSE_LIBJPEG=1 -sUSE_LIBPNG -sMALLOC=mimalloc \
-	-sMAIN_MODULE -sINITIAL_MEMORY=2047mb -sSHARED_MEMORY=1 -sUSE_PTHREADS -sPTHREAD_POOL_SIZE=navigator.hardwareConcurrency -sPTHREAD_POOL_SIZE_STRICT=0 \
+	-sMAIN_MODULE -sINCLUDE_FULL_LIBRARY=1 \
+	-sINITIAL_MEMORY=512mb -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=1536mb -sMEMORY_GROWTH_LINEAR_STEP=64mb \
+	-sSHARED_MEMORY=1 -sUSE_PTHREADS -sPTHREAD_POOL_SIZE=navigator.hardwareConcurrency -sPTHREAD_POOL_SIZE_STRICT=0 \
 	-sFULL_ES3 -sSTACK_SIZE=4mb --shell-file=emscripten/shell.html \
 	-sASSERTIONS=2 -sSTACK_OVERFLOW_CHECK=2 --profiling-funcs \
 	-sPROXY_TO_PTHREAD -sOFFSCREENCANVASES_TO_PTHREAD="#canvas" -sOFFSCREENCANVAS_SUPPORT=1 \
 	--pre-js emscripten/pre.js --post-js emscripten/post.js \
-	-L build/install/ \
+	$preload_libs \
 	build/launcher_main/libhl2_launcher.a \
-	$link_libs \
 	-o build/launcher_main/hl2_launcher.html
 
 cp build/launcher_main/hl2_launcher.* build/install/
