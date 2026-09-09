@@ -108,18 +108,38 @@ jobs:
           # background1 becomes available before the remaining chamber chunks
           # finish packing. Do not let the iPhone launch midway through the local
           # VPK build just because the initial chunk probe already succeeds.
+          # Also force Safari to update the isolation worker without HTTP cache
+          # and give every launcher document navigation a unique URL. This stops
+          # an old generated shell/glue pair from surviving across Pages deploys.
           python3 - <<'PY'
           from pathlib import Path
           path = Path('build/install/index.html')
           text = path.read_text()
+
           old = 'const ready=threadReady&&runtimeReady&&verified&&chunk.ok;'
           new = 'const ready=threadReady&&runtimeReady&&verified&&chunk.ok&&!buildingLocal;'
           if old not in text:
               raise SystemExit('Render360 Portal: staging launch readiness expression changed unexpectedly')
           text = text.replace(old, new, 1)
+
+          old = "const registration=await navigator.serviceWorker.register('./render360-pages-sw.js',{scope:'./'});"
+          new = "const registration=await navigator.serviceWorker.register('./render360-pages-sw.js',{scope:'./',updateViaCache:'none'});await registration.update();"
+          if old not in text:
+              raise SystemExit('Render360 Portal: service-worker registration changed unexpectedly')
+          text = text.replace(old, new, 1)
+
+          old = "$('launch').addEventListener('click',()=>{location.href='./hl2_launcher.html'});"
+          new = "$('launch').addEventListener('click',()=>{location.href='./hl2_launcher.html?render360='+Date.now()});"
+          if old not in text:
+              raise SystemExit('Render360 Portal: launcher navigation changed unexpectedly')
+          text = text.replace(old, new, 1)
+
           path.write_text(text)
           PY
           grep -q 'chunk.ok&&!buildingLocal' build/install/index.html
+          grep -q "updateViaCache:'none'" build/install/index.html
+          grep -q "registration.update()" build/install/index.html
+          grep -q "hl2_launcher.html?render360=" build/install/index.html
 
           touch build/install/.nojekyll
 
