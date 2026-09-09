@@ -23,6 +23,11 @@ const UPSTREAM_CHUNK_BASE = 'https://yikes.pw/portal/chunks/';
 const UPSTREAM_TIMEOUT_MS = 8000;
 const MUTABLE_RUNTIME_RE = /\.(?:html?|js|mjs|wasm|so|json)$/i;
 
+// This staging revision changes how Source handles optional desktop .so modules.
+// Force one clean VPK-cache rebuild when the new worker activates so an iPhone
+// cannot keep testing a chunk set created by an older runtime revision.
+const REBUILD_LOCAL_CHUNKS_ON_ACTIVATE = true;
+
 self.addEventListener('install', event => {
   self.skipWaiting();
 });
@@ -30,6 +35,10 @@ self.addEventListener('install', event => {
 self.addEventListener('activate', event => {
   event.waitUntil((async () => {
     await caches.delete(OLD_LOCAL_CHUNK_CACHE);
+    if (REBUILD_LOCAL_CHUNKS_ON_ACTIVATE) {
+      await caches.delete(LOCAL_CHUNK_CACHE);
+      console.info('[Render360 Pages SW] cleared local Portal chunks for clean runtime rebuild');
+    }
     await self.clients.claim();
   })());
 });
