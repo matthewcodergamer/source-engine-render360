@@ -43,6 +43,17 @@ jobs:
           grep -q -- '-sPROXY_TO_PTHREAD' emscripten/build.sh
           grep -q -- '-sOFFSCREENCANVASES_TO_PTHREAD' emscripten/build.sh
           grep -q -- '-sMAIN_MODULE' emscripten/build.sh
+          grep -q -- '-sINCLUDE_FULL_LIBRARY=1' emscripten/build.sh
+          grep -q -- '-sINITIAL_MEMORY=512mb' emscripten/build.sh
+          grep -q -- '-sALLOW_MEMORY_GROWTH=1' emscripten/build.sh
+          grep -q -- '-sMAXIMUM_MEMORY=1536mb' emscripten/build.sh
+          grep -q -- '-sMEMORY_GROWTH_LINEAR_STEP=64mb' emscripten/build.sh
+          grep -q -- '--preload-file' emscripten/build.sh
+          grep -q 'EMCC_FORCE_STDLIBS=1' emscripten/build.sh
+          if grep -q 'link_libs=' emscripten/build.sh; then
+            echo 'Render360 Portal: SIDE_MODULEs were returned to load-time linking; Source requires runtime dlopen.' >&2
+            exit 1
+          fi
           grep -q 'Atomics.store' emscripten/pre.js
           grep -q 'Do not speculatively load' emscripten/pre.js
           if grep -q 'background preload failed' emscripten/pre.js; then
@@ -52,6 +63,7 @@ jobs:
           grep -q 'Portal JS exception' emscripten/shell.html
           grep -q 'libsourcevr.so' emscripten/build.sh
           grep -q 'libstdshader_dx9.so' emscripten/build.sh
+          grep -q 'json|data' emscripten/render360-pages-sw.js
 
       - name: Validate dual-source staging JavaScript
         shell: bash
@@ -95,13 +107,19 @@ jobs:
           test -s build/install/hl2_launcher.html
           test -s build/install/hl2_launcher.js
           test -s build/install/hl2_launcher.wasm
+          # Runtime dlopen SIDE_MODULEs are packaged into MEMFS by --preload-file.
+          test -s build/install/hl2_launcher.data
+          grep -a -q 'hl2_launcher.data' build/install/hl2_launcher.js
+          grep -a -q 'libengine.so' build/install/hl2_launcher.js
+          grep -a -q 'libfilesystem_stdio.so' build/install/hl2_launcher.js
           test -s emscripten/portal-local-vpk.js
           grep -q 'Portal JS exception' build/install/hl2_launcher.html
           grep -q 'chunks/${mapName}.data' emscripten/pre.js
 
           # Public CI stays runtime-only. The browser fallback generates .data
           # chunks from the tester's own selected Portal/VPK files and stores
-          # them only in that browser's Cache Storage.
+          # them only in that browser's Cache Storage. hl2_launcher.data is the
+          # generated Emscripten runtime package and is explicitly allowed.
           if find build/install -type f -path '*/chunks/*.data' -print -quit | grep -q .; then
             echo 'Refusing to publish bundled Portal .data chunks.' >&2
             exit 1
@@ -116,7 +134,7 @@ jobs:
           # VPK build just because the initial chunk probe already succeeds.
           # Also force Safari to update the isolation worker without HTTP cache
           # and give every launcher document navigation a unique URL. This stops
-          # an old generated shell/glue pair from surviving across Pages deploys.
+          # an old generated shell/glue/data set from surviving across Pages deploys.
           python3 - <<'PY'
           from pathlib import Path
           path = Path('build/install/index.html')
@@ -153,8 +171,11 @@ jobs:
           {
             "repository": "${GITHUB_REPOSITORY}",
             "commit": "${GITHUB_SHA}",
-            "runtimeModel": "upstream-pthreads-shared-memory",
-            "engineArchitectureChanged": false,
+            "runtimeModel": "pthreads-shared-memory-runtime-dlopen",
+            "sideModuleDelivery": "preloaded-memfs",
+            "initialMemoryMiB": 512,
+            "maximumMemoryMiB": 1536,
+            "memoryGrowth": true,
             "diagnostics": true,
             "pagesIsolation": "service-worker-staging-only",
             "runtimeChunkPath": "chunks/<map>.data",
