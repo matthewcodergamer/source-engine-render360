@@ -41,16 +41,40 @@
       var spinnerElement = document.getElementById('spinner');
       var canvasElement = document.getElementById('canvas');
       var outputElement = document.getElementById('output');
-      if (outputElement) outputElement.value = ''; // clear browser cache
+
+      // Source is extremely chatty during module/material startup. Repeatedly
+      // doing textarea.value += line makes WebKit copy an ever-growing string on
+      // every log line, which creates substantial transient memory exactly while
+      // the Wasm heap, map data and pthread workers are also resident. Keep only
+      // a bounded diagnostic tail and batch DOM writes to one per animation frame.
+      var render360OutputBuffer = '';
+      var render360OutputFlushPending = false;
+      var RENDER360_OUTPUT_MAX_CHARS = 196608;
+      if (outputElement) outputElement.value = '';
+
+      function render360AppendOutput(text) {
+        if (!outputElement) return;
+        render360OutputBuffer += String(text) + '\n';
+        if (render360OutputBuffer.length > RENDER360_OUTPUT_MAX_CHARS) {
+          render360OutputBuffer = render360OutputBuffer.slice(-RENDER360_OUTPUT_MAX_CHARS);
+        }
+        if (render360OutputFlushPending) return;
+        render360OutputFlushPending = true;
+        var flush = function() {
+          render360OutputFlushPending = false;
+          if (!outputElement) return;
+          outputElement.value = render360OutputBuffer;
+          outputElement.scrollTop = outputElement.scrollHeight;
+        };
+        if (typeof requestAnimationFrame === 'function') requestAnimationFrame(flush);
+        else setTimeout(flush, 16);
+      }
 
       function render360Report(kind, message, error) {
         var stack = error && error.stack ? '\n' + error.stack : '';
         var detail = '[Render360 ' + kind + '] ' + String(message || '<no message>') + stack;
         console.error(detail);
-        if (outputElement) {
-          outputElement.value += detail + '\n';
-          outputElement.scrollTop = outputElement.scrollHeight;
-        }
+        render360AppendOutput(detail);
         if (statusElement) statusElement.textContent = detail;
         return detail;
       }
@@ -84,7 +108,7 @@
       }, false);
       canvasElement.addEventListener('webglcontextrestored', () => {
         console.warn('[Render360 WebGL context restored]');
-        if (outputElement) outputElement.value += '[Render360 WebGL context restored]\n';
+        render360AppendOutput('[Render360 WebGL context restored]');
       }, false);
 
 	  canvasElement.widthNative = screen.availWidth
@@ -93,19 +117,11 @@
       var Module = {
         print(...args) {
           console.log(...args);
-          if (outputElement) {
-            var text = args.join(' ');
-            outputElement.value += text + "\n";
-            outputElement.scrollTop = outputElement.scrollHeight;
-          }
+          render360AppendOutput(args.join(' '));
         },
         printErr(...args) {
           console.error(...args);
-          if (outputElement) {
-            var text = '[stderr] ' + args.join(' ');
-            outputElement.value += text + "\n";
-            outputElement.scrollTop = outputElement.scrollHeight;
-          }
+          render360AppendOutput('[stderr] ' + args.join(' '));
         },
         canvas: canvasElement,
         setStatus(text) {
