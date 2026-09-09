@@ -55,26 +55,24 @@
         return detail;
       }
 
-      function render360RequestFullscreen() {
+      async function render360RequestFullscreen() {
+        // Do not call Emscripten's requestFullscreen wrapper on iPhone. The
+        // wrapper may target an internal canvas container that WebKit does not
+        // expose as a fullscreen-capable element. Use the browser API directly
+        // when Safari exposes it, otherwise keep Portal inline/standalone.
         try {
-          if (Module && typeof Module.requestFullscreen === 'function') {
-            // Touch-first iPhone staging: no pointer lock, resize the canvas.
-            Module.requestFullscreen(false, true);
-            return;
+          var target = canvasElement;
+          var request = target.requestFullscreen || target.webkitRequestFullscreen;
+          if (typeof request !== 'function') {
+            console.info('[Render360 fullscreen] Element fullscreen is unavailable on this Safari build; continuing inline.');
+            return false;
           }
-          var request = canvasElement.requestFullscreen || canvasElement.webkitRequestFullscreen;
-          if (request) {
-            var result = request.call(canvasElement);
-            if (result && typeof result.catch === 'function') {
-              result.catch(function(error) {
-                render360Report('fullscreen failure', error && error.message ? error.message : String(error), error);
-              });
-            }
-            return;
-          }
-          render360Report('fullscreen unavailable', 'This Safari build does not expose element fullscreen here. The Portal canvas can still run inline.');
+          var result = request.call(target);
+          if (result && typeof result.then === 'function') await result;
+          return true;
         } catch (error) {
           render360Report('fullscreen failure', error && error.message ? error.message : String(error), error);
+          return false;
         }
       }
 
