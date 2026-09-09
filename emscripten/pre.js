@@ -1,13 +1,21 @@
-// Emscripten's preload-file Wasm plugin normally recognizes every *.so in
-// hl2_launcher.data and instantiates it before main(). Source does its own
-// runtime dlopen() from the launcher pthread, so that eager preload races the
-// first real dlopen and can leave LDSO.loadedLibsByName[name] === "loading"
-// while thread synchronization re-enters the same library. On iOS Safari that
-// aborts with "Attempt to load 'liblauncher.so' twice before the first load
-// completed". Disable only the preload Wasm decoder so *.so bytes are created
-// as ordinary MEMFS files; Emscripten's normal dlopen loader will instantiate
-// each SIDE_MODULE once, on demand, exactly when Source asks for it.
+// Keep packaged SIDE_MODULE bytes as ordinary MEMFS files. Source performs its
+// own runtime dlopen() calls and must not race Emscripten's preload-file Wasm
+// decoder on the same .so names.
 Module['noWasmDecoding'] = true
+
+// liblauncher.so is the first Source module opened from the PROXY_TO_PTHREAD
+// application thread. On iOS the first runtime dlopen can re-enter through
+// Emscripten's pthread task queue while that DSO is still marked "loading",
+// producing: Attempt to load 'liblauncher.so' twice before the first load
+// completed. Load this ONE root DSO before main() using Emscripten's supported
+// MAIN_MODULE startup path. Source's later dlopen then reuses the completed DSO.
+// All other Source SIDE_MODULEs remain demand-loaded by Source.
+Module['dynamicLibraries'] = ['liblauncher.so']
+
+Module['preRun'] = Module['preRun'] || []
+Module['preRun'].push(() => {
+	Module.print?.('[Render360] load-time liblauncher preload requested')
+})
 
 Module['arguments'] = Module['arguments'] || []
 Module['arguments'].push(
@@ -42,6 +50,7 @@ class DataLoader {
 	]
 
 	loadedMaps = {}
+	bootOverlayPromise = null
 
 	async loadMapWithDeps(mapName) {
 		const index = this.mapsOrdered.indexOf(mapName)
@@ -53,8 +62,7 @@ class DataLoader {
 		// chunks, so load only the required prefix here. Do not speculatively load
 		// the next chamber. background1.data is already ~220 MiB and the first
 		// chamber is another ~160 MiB; preloading both before the menu appears is
-		// unnecessary memory pressure on iPhone Safari and can push WebKit into an
-		// abort/termination path while Source is still creating materials.
+		// unnecessary memory pressure on iPhone Safari.
 		for(let i = 0; i < index + 1; i++) {
 			await this.loadMapCached(this.mapsOrdered[i])
 		}
@@ -80,6 +88,82 @@ class DataLoader {
 		}
 	}
 
+	writeDataBuffer(arrayBuffer, label) {
+		if(!(arrayBuffer instanceof ArrayBuffer)) {
+			throw new Error(`${label}: response is not binary data`)
+		}
+
+		const dv = new DataView(arrayBuffer)
+		let offset = 0
+		let fileCount = 0
+		const decoder = new TextDecoder()
+
+		// data format: { pathLen: uint32le, dataLen: uint32le, path: bytes, blob: bytes }[]
+		while(offset < dv.byteLength) {
+			if(dv.byteLength - offset < 8) {
+				throw new Error(`${label}: truncated record header at ${offset}/${dv.byteLength}`)
+			}
+			const pathLen = dv.getUint32(offset, true)
+			const dataLen = dv.getUint32(offset + 4, true)
+			const recordEnd = offset + 8 + pathLen + dataLen
+			if(pathLen === 0 || pathLen > 1024 * 1024 || recordEnd > dv.byteLength) {
+				throw new Error(`${label}: record ${fileCount} exceeds buffer (${recordEnd}/${dv.byteLength})`)
+			}
+
+			const path = decoder.decode(new Uint8Array(dv.buffer, offset + 8, pathLen))
+			const blob = new Uint8Array(dv.buffer, offset + 8 + pathLen, dataLen)
+			offset = recordEnd
+			fileCount++
+
+			// Game-data chunks must never supply native executables/shared libraries.
+			// Emscripten SIDE_MODULE .so files are built and shipped with the runtime,
+			// not sourced from Portal retail/VPK data.
+			if(/\.(?:dll|dylib|exe|so)$/i.test(path)) {
+				Module.printErr?.(`[Render360] ignored native binary from game-data chunk: ${path}`)
+				continue
+			}
+
+			const dir = path.replace(/\/[^\/]+$/, '')
+			FS.mkdirTree(dir)
+			FS.writeFile(path, blob)
+		}
+
+		return { fileCount, byteLength: dv.byteLength }
+	}
+
+	async loadBootOverlay() {
+		if(this.bootOverlayPromise) return this.bootOverlayPromise
+
+		this.bootOverlayPromise = (async () => {
+			try {
+				// Fetch the tiny user-generated VPK overlay separately from the ~220 MiB
+				// background chunk. Concatenating them into one service-worker stream was
+				// intermittently ending as an XHR network error on iOS Safari even though
+				// the launch-page header probe returned HTTP 200.
+				const response = await fetch('render360-bootstrap-overlay.data', {
+					cache: 'no-store',
+					credentials: 'same-origin'
+				})
+				if(response.status === 404) {
+					Module.print?.('[Render360] no local boot overlay present; continuing with base chunk')
+					return
+				}
+				if(!response.ok) {
+					throw new Error(`HTTP ${response.status}`)
+				}
+				const bytes = await response.arrayBuffer()
+				const result = this.writeDataBuffer(bytes, 'boot overlay')
+				Module.print?.(`[Render360] loaded boot overlay: ${result.fileCount} records, ${result.byteLength} bytes`)
+			} catch(error) {
+				// The base historical chunk may already contain enough files to boot, so
+				// surface the overlay error but do not convert it into a fake map failure.
+				Module.printErr?.(`[Render360] boot overlay load failed: ${error?.stack || error}`)
+			}
+		})()
+
+		return this.bootOverlayPromise
+	}
+
 	async loadMap(mapName) {
 		this.setProgress(mapName, 0)
 
@@ -96,53 +180,17 @@ class DataLoader {
 			reject(new Error(`cannot load map ${mapName}: network error`))
 		}
 
-		xhr.onload = () => {
+		xhr.onload = async () => {
 			try {
 				if(xhr.status < 200 || xhr.status >= 300) {
 					throw new Error(`cannot load map ${mapName}: HTTP ${xhr.status}`)
 				}
-				if(!(xhr.response instanceof ArrayBuffer)) {
-					throw new Error(`cannot load map ${mapName}: response is not binary data`)
-				}
 
-				const dv = new DataView(xhr.response)
-				let offset = 0
-				let fileCount = 0
-
-				// data format: { pathLen: uint32le, dataLen: uint32le, path: bytes, blob: bytes }[]
-				while(offset < dv.byteLength) {
-					if(dv.byteLength - offset < 8) {
-						throw new Error(`corrupt ${mapName}.data: truncated record header at ${offset}/${dv.byteLength}`)
-					}
-					const pathLen = dv.getUint32(offset, true)
-					const dataLen = dv.getUint32(offset + 4, true)
-					const recordEnd = offset + 8 + pathLen + dataLen
-					if(pathLen === 0 || pathLen > 1024 * 1024 || recordEnd > dv.byteLength) {
-						throw new Error(`corrupt ${mapName}.data: record ${fileCount} exceeds buffer (${recordEnd}/${dv.byteLength})`)
-					}
-
-					const path = new TextDecoder().decode(new Uint8Array(dv.buffer, offset + 8, pathLen))
-					const blob = new Uint8Array(dv.buffer, offset + 8 + pathLen, dataLen)
-					offset = recordEnd
-					fileCount++
-
-					// Game-data chunks must never supply native executables/shared libraries.
-					// Emscripten SIDE_MODULE .so files are built and shipped with the runtime,
-					// not sourced from Portal retail/VPK data.
-					if(/\.(?:dll|dylib|exe|so)$/i.test(path)) {
-						Module.printErr?.(`[Render360] ignored native binary from game-data chunk: ${path}`)
-						continue
-					}
-
-					const dir = path.replace(/\/[^\/]+$/, '')
-					FS.mkdirTree(dir)
-					FS.writeFile(path, blob)
-				}
+				const result = this.writeDataBuffer(xhr.response, `${mapName}.data`)
+				if(mapName === 'background1') await this.loadBootOverlay()
 
 				this.setProgress(mapName, 1)
-				Module.print?.(`[Render360] loaded ${mapName}.data: ${fileCount} records, ${dv.byteLength} bytes`)
-				// Drop event callbacks immediately after the ArrayBuffer has been copied
-				// into MEMFS so WebKit can reclaim the large XHR backing store sooner.
+				Module.print?.(`[Render360] loaded ${mapName}.data: ${result.fileCount} records, ${result.byteLength} bytes`)
 				xhr.onprogress = null
 				xhr.onerror = null
 				xhr.onload = null
