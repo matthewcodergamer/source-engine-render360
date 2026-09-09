@@ -1,3 +1,14 @@
+// Emscripten's preload-file Wasm plugin normally recognizes every *.so in
+// hl2_launcher.data and instantiates it before main(). Source does its own
+// runtime dlopen() from the launcher pthread, so that eager preload races the
+// first real dlopen and can leave LDSO.loadedLibsByName[name] === "loading"
+// while thread synchronization re-enters the same library. On iOS Safari that
+// aborts with "Attempt to load 'liblauncher.so' twice before the first load
+// completed". Disable only the preload Wasm decoder so *.so bytes are created
+// as ordinary MEMFS files; Emscripten's normal dlopen loader will instantiate
+// each SIDE_MODULE once, on demand, exactly when Source asks for it.
+Module['noWasmDecoding'] = true
+
 Module['arguments'] = Module['arguments'] || []
 Module['arguments'].push(
 	'-game', 'portal',
