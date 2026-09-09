@@ -24,6 +24,7 @@
   const MAX_TEXT_SCAN_BYTES = 24 * 1024 * 1024;
   const MAX_VMT_BYTES = 2 * 1024 * 1024;
   const MAX_MODEL_MATERIALS = 600;
+  const NATIVE_BINARY_RE = /\.(?:dll|dylib|exe|so)$/i;
 
   function normalizePath(value) {
     return String(value || '')
@@ -317,6 +318,7 @@
 
   function commonAssetPaths(source) {
     return source.entriesMatching((path, descriptor) => {
+      if (NATIVE_BINARY_RE.test(path)) return false;
       if (/\/(portal|hl2)\/gameinfo\.txt$/.test(path)) return true;
       if (/^\/(portal|hl2|platform)\/(resource|cfg|scripts|media)\//.test(path)) return descriptor.size <= 16 * 1024 * 1024;
       if (/^\/(portal|hl2|platform)\/materials\/(vgui|console|hud)\//.test(path)) return descriptor.size <= 16 * 1024 * 1024;
@@ -331,11 +333,11 @@
     const queue = [...initialPaths];
     const processedText = new Set();
     const processedModels = new Set();
-    const enqueue = path => { if (path && !wanted.has(path)) queue.push(path); };
+    const enqueue = path => { if (path && !wanted.has(path) && !NATIVE_BINARY_RE.test(path)) queue.push(path); };
 
     const resolveLooseReference = (value, preferredRoot) => {
       const clean = normalizePath(value).replace(/^\/+/, '');
-      if (!clean) return null;
+      if (!clean || NATIVE_BINARY_RE.test(clean)) return null;
       if (clean.startsWith('materials/') || clean.startsWith('models/') || clean.startsWith('sound/') || clean.startsWith('portal/') || clean.startsWith('hl2/') || clean.startsWith('platform/')) return source.resolveGamePath(clean, preferredRoot);
       if (/\.(wav|mp3)$/.test(clean)) return source.resolveSound(clean, preferredRoot);
       if (/\.mdl$/.test(clean)) return source.resolveModel(clean, preferredRoot);
@@ -345,7 +347,7 @@
 
     while (queue.length) {
       const path = queue.shift();
-      if (!path || wanted.has(path) || !source.get(path)) continue;
+      if (!path || wanted.has(path) || NATIVE_BINARY_RE.test(path) || !source.get(path)) continue;
       wanted.add(path);
       const ext = extname(path);
       const root = path.startsWith('/hl2/') ? 'hl2' : 'portal';
@@ -422,6 +424,7 @@
           continue;
         }
         const clean = normalizePath(raw).replace(/^\/+/, '');
+        if (NATIVE_BINARY_RE.test(clean)) continue;
         let resolved = null;
         if (clean.startsWith('models/') || clean.startsWith('materials/') || clean.startsWith('sound/')) resolved = source.resolveGamePath(clean, 'portal');
         else if (/\.mdl$/.test(clean)) resolved = source.resolveModel(clean, 'portal');
@@ -444,6 +447,10 @@
     let files = 0;
     let bytes = 0;
     for (const path of paths) {
+      if (NATIVE_BINARY_RE.test(path)) {
+        log(`Local fallback ignored native binary: ${path}`);
+        continue;
+      }
       try {
         const blob = await source.read(path);
         if (blob.size > 0xffffffff) throw new Error('single file exceeds 4 GiB packed format limit');
@@ -490,7 +497,7 @@
         continue;
       }
       const delta = [];
-      for (const path of paths) if (!seen.has(path)) { seen.add(path); delta.push(path); }
+      for (const path of paths) if (!seen.has(path) && !NATIVE_BINARY_RE.test(path)) { seen.add(path); delta.push(path); }
       progress({ phase: 'pack', mapName, index: i, total: MAPS.length, message: `Packing ${mapName}` });
       const packed = await packPaths(source, delta, log);
       const url = new URL(`./chunks/${mapName}.data`, location.href).href;
