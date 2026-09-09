@@ -181,7 +181,7 @@ done
 # With this pinned SDK that drags WebGPU/Dawn references such as
 # wgpuTextureViewRelease/wgpuTextureViewSetLabel into a ToGL/WebGL build and the
 # final link aborts. Force only Source's core C/C++ runtime libraries instead.
-EMCC_FORCE_STDLIBS=libc,libcxx,libcxxabi emcc \
+EMCC_FORCE_STDLIBS=libc,libc++,libc++abi emcc \
 	-sUSE_BZIP2=1 -sUSE_SDL=2 -sUSE_FREETYPE=1 -sUSE_LIBJPEG=1 -sUSE_LIBPNG -sMALLOC=mimalloc \
 	-sMAIN_MODULE -sINCLUDE_FULL_LIBRARY=1 \
 	-sINITIAL_MEMORY=512mb -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=1536mb -sMEMORY_GROWTH_LINEAR_STEP=64mb \
