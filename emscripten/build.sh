@@ -124,6 +124,25 @@ Path('build/install/render360-wasm-side-modules.txt').write_text(
 print(f'Render360 Portal: verified {len(mods)} WebAssembly SIDE_MODULEs')
 PY
 
+# These are not optional probes: they are the Source filesystem/engine/material
+# and ToGL shader path needed to reach a real Portal frame. Refuse to deploy a
+# Pages runtime that is missing any of them, even if the generic .so validation
+# above succeeds.
+for required in \
+	libfilesystem_stdio.so \
+	libengine.so \
+	libmaterialsystem.so \
+	libshaderapidx9.so \
+	libstdshader_dx9.so
+do
+	if [ ! -s "build/install/$required" ]; then
+		echo "Render360 Portal: required Wasm module missing: $required" >&2
+		exit 1
+	fi
+	done
+
+echo "Render360 Portal: required filesystem/engine/ToGL module set present"
+
 #link_libs="-sERROR_ON_UNDEFINED_SYMBOLS=0"
 for lib in build/install/*.so; do
 	libname=$(echo $lib | sed -E 's/^.+\/lib(.+)\.so/\1/g')
