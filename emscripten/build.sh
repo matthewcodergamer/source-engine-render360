@@ -97,6 +97,13 @@ for marker in (
 ):
     if marker not in updated:
         raise SystemExit(f'Render360 Portal: loader patch missing {marker}')
+# Guard against the exact escaping regression that previously broke CI.
+if "strrchr(pModuleName, '\\\\');" not in updated:
+    raise SystemExit('Render360 Portal: generated backslash basename check is malformed')
+if 'Msg("Render360: optional browser module skipped: %s\\n", szModuleName);' not in updated:
+    raise SystemExit('Render360 Portal: generated optional-module log newline is malformed')
+if 'Msg("LoadLibrary: path: %s\\n", szModuleName);' not in updated:
+    raise SystemExit('Render360 Portal: generated LoadLibrary log newline is malformed')
 path.write_text(updated)
 print('Render360 Portal: patched Sys_LoadModule optional browser-module handling')
 PY
