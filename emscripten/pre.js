@@ -38,15 +38,14 @@ class DataLoader {
 			throw new Error(`no such map: ${mapName}`)
 		}
 
+		// The packed Portal chunks are deltas: a later map depends on all earlier
+		// chunks, so load only the required prefix here. Do not speculatively load
+		// the next chamber. background1.data is already ~220 MiB and the first
+		// chamber is another ~160 MiB; preloading both before the menu appears is
+		// unnecessary memory pressure on iPhone Safari and can push WebKit into an
+		// abort/termination path while Source is still creating materials.
 		for(let i = 0; i < index + 1; i++) {
 			await this.loadMapCached(this.mapsOrdered[i])
-		}
-
-		const next = this.mapsOrdered[index + 1]
-		if(next) {
-			this.loadMapCached(next).catch(error => {
-				Module.printErr?.(`[Render360] background preload failed for ${next}: ${error?.stack || error}`)
-			})
 		}
 	}
 
@@ -131,10 +130,18 @@ class DataLoader {
 
 				this.setProgress(mapName, 1)
 				Module.print?.(`[Render360] loaded ${mapName}.data: ${fileCount} records, ${dv.byteLength} bytes`)
+				// Drop event callbacks immediately after the ArrayBuffer has been copied
+				// into MEMFS so WebKit can reclaim the large XHR backing store sooner.
+				xhr.onprogress = null
+				xhr.onerror = null
+				xhr.onload = null
 				resolve()
 			} catch(error) {
 				this.setProgress(mapName, 1)
 				Module.printErr?.(`[Render360] ${error?.stack || error}`)
+				xhr.onprogress = null
+				xhr.onerror = null
+				xhr.onload = null
 				reject(error)
 			}
 		}
