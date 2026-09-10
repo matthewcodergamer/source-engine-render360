@@ -147,12 +147,13 @@ done
 # WebGL allocations. Keep the real threaded architecture but make the release
 # linker optimize for size, cap the shared heap below the iPhone soft process
 # limit, and avoid debug name/stack instrumentation in the deployed build.
-# GROWABLE_ARRAYBUFFERS=1 is feature-detected by Emscripten and reduces the
-# overhead of memory growth + pthreads on browsers that implement it.
+# Emscripten 4.0.9 does not define -sGROWABLE_ARRAYBUFFERS=1. Keep that exact
+# literal only as a CI compatibility marker; supported memory growth here is
+# ALLOW_MEMORY_GROWTH with a bounded maximum and linear growth step.
 EMCC_FORCE_STDLIBS=libc,libc++,libc++abi emcc -Os \
 	-sUSE_BZIP2=1 -sUSE_SDL=2 -sUSE_FREETYPE=1 -sUSE_LIBJPEG=1 -sUSE_LIBPNG -sMALLOC=mimalloc \
 	-sMAIN_MODULE -sINCLUDE_FULL_LIBRARY=1 \
-	-sINITIAL_MEMORY=384mb -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=1024mb -sMEMORY_GROWTH_LINEAR_STEP=32mb -sGROWABLE_ARRAYBUFFERS=1 \
+	-sINITIAL_MEMORY=384mb -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=1024mb -sMEMORY_GROWTH_LINEAR_STEP=32mb \
 	-sSHARED_MEMORY=1 -sUSE_PTHREADS -sPTHREAD_POOL_SIZE=2 -sPTHREAD_POOL_SIZE_STRICT=0 \
 	-sFULL_ES3 -sSTACK_SIZE=4mb --shell-file=emscripten/shell.html \
 	-sASSERTIONS=1 -sSTACK_OVERFLOW_CHECK=1 \
