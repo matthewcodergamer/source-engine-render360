@@ -16,7 +16,6 @@
   const OVER_BUDGET_MS = 10000
 
   const isWindow = typeof window !== 'undefined' && typeof document !== 'undefined'
-  const isPthread = typeof ENVIRONMENT_IS_PTHREAD !== 'undefined' && !!ENVIRONMENT_IS_PTHREAD
 
   let channel = null
   try {
@@ -107,9 +106,11 @@
         background:
           linear-gradient(90deg, rgba(255,255,255,.025), rgba(255,255,255,0) 18%),
           repeating-linear-gradient(90deg, #101316 0 1px, #0b0d0f 1px 46px, #15181b 47px 48px);
-        will-change: transform;
+        will-change: auto;
         transition: transform 220ms cubic-bezier(.2,.75,.2,1);
       }
+      #render360-phase4-transition.r360-visible .r360-door,
+      #render360-phase4-transition.r360-opening .r360-door { will-change: transform; }
       #render360-phase4-transition .r360-left { left: 0; transform: translate3d(-101%,0,0); }
       #render360-phase4-transition .r360-right { right: 0; transform: translate3d(101%,0,0); }
       #render360-phase4-transition.r360-visible .r360-left,
@@ -191,7 +192,6 @@
     const map = normalizeMap(mapName)
     state.sequence++
     state.active = true
-    state.visible = false
     state.map = map
     state.startedAt = now()
     state.completedAt = 0
@@ -200,8 +200,18 @@
     hideTimer = clearTimer(hideTimer)
     budgetTimer = clearTimer(budgetTimer)
 
+    // If a second transition begins while the previous door-open animation is
+    // still on screen, reuse the existing closed mask instead of flashing the
+    // game for a frame and allocating another compositor transition.
+    const alreadyVisible = !!(overlay && overlay.classList.contains('r360-visible'))
+    state.visible = alreadyVisible
+    if(alreadyVisible) {
+      overlay.classList.remove('r360-opening')
+      state.visibleAt = now()
+    }
+
     const sequence = state.sequence
-    revealTimer = setTimeout(() => reveal(sequence), REVEAL_DELAY_MS)
+    if(!alreadyVisible) revealTimer = setTimeout(() => reveal(sequence), REVEAL_DELAY_MS)
     budgetTimer = setTimeout(() => {
       if(!state.active || sequence !== state.sequence) return
       state.overBudget = true
