@@ -89,31 +89,55 @@ path.write_text(updated)
 print('Render360 Phase 4: patched modern glMapBufferRange validation')
 PY
 
-# Clang 24 no longer accepts the IVP codebase's historical implicit alloca()
-# declarations. Keep the physics code's behavior unchanged and make the
-# declaration explicit only for this Emscripten build. This patches the checked
-# out submodule in CI; it does not alter the source-physics submodule revision.
+# The release compiler profile force-includes <alloca.h> for every Wasm
+# translation unit, so do not mutate dozens of IVP submodule files just to add
+# the same declaration. Keeping the submodule checkout clean also makes genuine
+# physics-source changes easier to spot in CI diagnostics.
+
+# Source already tears down the old world on Host_Changelevel and explicitly
+# unloads unreferenced models. On iPhone we also ask the material system to drop
+# materials/textures whose refcounts reached zero at that same safe level-change
+# boundary. This preserves referenced shared/UI materials while preventing
+# map-specific material caches from quietly accumulating across chambers.
 python3 - <<'PY'
 from pathlib import Path
 
-root = Path('ivp')
-marker = '#if defined(__EMSCRIPTEN__)\n#include <alloca.h>\n#endif\n'
-patched = []
-for path in root.rglob('*'):
-    if path.suffix.lower() not in {'.c', '.cc', '.cpp', '.cxx', '.h', '.hh', '.hpp', '.hxx'}:
-        continue
-    try:
-        text = path.read_text()
-    except UnicodeDecodeError:
-        continue
-    if 'alloca(' not in text or marker in text:
-        continue
-    path.write_text(marker + text)
-    patched.append(str(path))
+path = Path('engine/host.cpp')
+text = path.read_text()
+marker = 'Render360 Phase 4: released unused level materials after old-world shutdown'
+if marker not in text:
+    old = '''\tmodelloader->UnloadUnreferencedModels();
 
-if not patched:
-    raise SystemExit('Render360 Phase 4: no IVP alloca call sites were patched; source layout may have changed')
-print(f'Render360 Phase 4: added Emscripten alloca declarations to {len(patched)} IVP files')
-for path in patched:
-    print(f'  {path}')
+\tg_TimeLastMemTest = 0;
+'''
+    new = '''\tmodelloader->UnloadUnreferencedModels();
+
+#if defined(__EMSCRIPTEN__) && !defined(SWDS)
+\t// Render360 iPhone memory policy: the old BSP/world and unreferenced models
+\t// are already gone at this point. Release only materials whose reference
+\t// counts say they are unused; keep shared UI/common assets that are still
+\t// referenced so the next chamber does not pay for a global material reload.
+\tif ( server && materials )
+\t{
+\t\tmaterials->UncacheUnusedMaterials( false );
+\t\tMsg( "Render360 Phase 4: released unused level materials after old-world shutdown.\\n" );
+\t}
+#endif
+
+\tg_TimeLastMemTest = 0;
+'''
+    if old not in text:
+        raise SystemExit('Render360 Phase 4: Host_FreeStateAndWorld cleanup anchor moved')
+    text = text.replace(old, new, 1)
+
+for required in (
+    marker,
+    'materials->UncacheUnusedMaterials( false );',
+    'modelloader->UnloadUnreferencedModels();',
+):
+    if required not in text:
+        raise SystemExit(f'Render360 Phase 4: old-world material cleanup missing marker: {required}')
+
+path.write_text(text)
+print('Render360 Phase 4: added refcount-safe unused-material cleanup at level shutdown')
 PY
