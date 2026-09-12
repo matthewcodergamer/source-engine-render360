@@ -382,7 +382,8 @@
   $('clearLocal').addEventListener('click',async()=>{if(globalThis.Render360PortalVPK)await Render360PortalVPK.clearLocalChunks();if(navigator.serviceWorker.controller)navigator.serviceWorker.controller.postMessage({type:'RENDER360_CLEAR_LOCAL_CHUNKS'});$('localProgress').hidden=true;$('localProgressText').textContent='Local VPK chunks cleared.';await refresh()});
   $('copyLog').addEventListener('click',copyDiagnostics);
   $('clearLog').addEventListener('click',()=>{logChunks=[];logHead=0;logChars=0;$('logSummary').textContent='Buffered diagnostics cleared.'});
-  $('launch').addEventListener('click',()=>{markManualRelaunch();location.href='./hl2_launcher.html'});
+  $('launch').addEventListener('click',markManualRelaunch);
+  $('launch').addEventListener('click',()=>{location.href='./hl2_launcher.html'});
   $('reload').addEventListener('click',()=>{sessionStorage.removeItem('render360PagesReloaded');location.reload()});
   window.addEventListener('error',event=>log('Page error:',event.message||event.type,event.error?.stack||''));
   window.addEventListener('unhandledrejection',event=>log('Unhandled rejection:',event.reason?.stack||String(event.reason)));
