@@ -61,7 +61,7 @@ CFLAGS = {
 	},
 	'fastnative': {
 		'msvc':    ['/O2', '/Oy', '/MT'],
-		'gcc':     ['-O2', '-march=native', '-funsafe-math-optimizations', '-funsafe-loop-optimizations', '-fomit-frame-pointer'],
+		'gcc':	   ['-O2', '-march=native', '-funsafe-math-optimizations', '-funsafe-loop-optimizations', '-fomit-frame-pointer'],
 		'clang':   ['-O2', '-march=native'],
 		'default': ['-O3']
 	},
@@ -72,7 +72,7 @@ CFLAGS = {
 	},
 	'debug': {
 		'msvc':    ['/Od', '/MTd'],
-		'owcc':    ['-g', '-O0', '-fno-omit-frame-pointer', '-funwind-tables'],
+		'owcc':    ['-g', '-O0', '-fno-omit-frame-pointer', '-funwind-tables', '-fno-omit-leaf-frame-pointer'],
 		'default': ['-g', '-O0'] #, '-ftree-vectorize', '-ffast-math']
 	},
 	'sanitize': {
