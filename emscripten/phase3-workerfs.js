@@ -11,6 +11,17 @@
 // filesystem opens the real retail VPKs and performs its normal seek/range reads.
 // The existing chunk/MEMFS loader remains available when hl2_launcher.html is
 // opened directly, so Phase 3 can be tested without deleting the known fallback.
+//
+// Map residency rule for the direct-VPK path:
+//   menu          -> background1 only
+//   gameplay      -> current BSP only
+//   transition    -> Source shuts the old level down, then opens the next BSP
+//   future maps   -> never prefetched by Render360
+//
+// The whole VPK set remains ADDRESSABLE through WORKERFS, but retail bytes are
+// not resident in MEMFS. Source's normal level shutdown owns native world/model/
+// material lifetime; the Render360 JS layer deliberately keeps no historical map
+// payload and never walks through earlier chambers to satisfy a later request.
 
 ;(() => {
   'use strict'
@@ -25,6 +36,25 @@
   const HANDOFF_TIMEOUT_MS = 20000
   const RETAIL_MOUNT = '/render360-retail'
   const ROOT_RE = /^(portal|hl2|platform)\//i
+  const MENU_MAP = 'background1'
+  const KNOWN_MAPS = new Set([
+    'background1',
+    'testchmb_a_00',
+    'testchmb_a_01',
+    'testchmb_a_02',
+    'testchmb_a_03',
+    'testchmb_a_04',
+    'testchmb_a_05',
+    'testchmb_a_06',
+    'testchmb_a_07',
+    'testchmb_a_08',
+    'testchmb_a_09',
+    'testchmb_a_10',
+    'testchmb_a_11',
+    'testchmb_a_13',
+    'testchmb_a_14',
+    'testchmb_a_15'
+  ])
 
   const isWindow = typeof window !== 'undefined' && typeof document !== 'undefined'
   const isPthread = typeof ENVIRONMENT_IS_PTHREAD !== 'undefined' && !!ENVIRONMENT_IS_PTHREAD
@@ -38,12 +68,27 @@
     if(typeof BroadcastChannel === 'function') channel = new BroadcastChannel(CHANNEL_NAME)
   } catch(_) {}
 
+  const residency = {
+    currentMap: null,
+    previousMap: null,
+    generation: 0,
+    mode: 'idle',
+    prefetchEnabled: false,
+    changedAt: 0
+  }
+
   function normalizeRetailPath(value) {
     return String(value || '')
       .replace(/\\/g, '/')
       .replace(/^\/+/, '')
       .replace(/\/+/g, '/')
       .toLowerCase()
+  }
+
+  function normalizeMapName(value) {
+    const clean = String(value || '').replace(/\\/g, '/').toLowerCase()
+    const base = clean.slice(clean.lastIndexOf('/') + 1).replace(/\.bsp$/i, '')
+    return base || clean
   }
 
   function dirname(path) {
@@ -62,6 +107,53 @@
 
   function safePrintErr(text) {
     try { Module.printErr?.(text) } catch(_) { try { console.error(text) } catch(__) {} }
+  }
+
+  function publishResidency() {
+    Module.render360CurrentMap = residency.currentMap
+    Module.render360MapResidency = {
+      currentMap: residency.currentMap,
+      previousMap: residency.previousMap,
+      generation: residency.generation,
+      mode: residency.mode,
+      prefetchEnabled: false,
+      changedAt: residency.changedAt
+    }
+  }
+
+  function enterCurrentMap(mapName) {
+    const next = normalizeMapName(mapName)
+    if(!next) throw new Error('Phase 3 received an empty map name')
+    if(!KNOWN_MAPS.has(next)) {
+      safePrint(`[Render360 Phase 3] map ${next} is outside the initial Portal manifest; treating it as current-map-only without prefetch.`)
+    }
+
+    if(residency.currentMap === next) {
+      publishResidency()
+      return { changed: false, ...Module.render360MapResidency }
+    }
+
+    const previous = residency.currentMap
+    residency.previousMap = previous
+    residency.currentMap = next
+    residency.generation++
+    residency.mode = next === MENU_MAP ? 'menu-only' : 'current-map-only'
+    residency.changedAt = Date.now()
+    publishResidency()
+
+    // There is intentionally no JS-side unload loop here. In the direct-VPK
+    // path Render360 never unpacked the old map into MEMFS in the first place.
+    // Source's native level shutdown releases the old BSP/world resources; the
+    // VPK files stay mounted as read-only backing storage for future range reads.
+    if(previous) {
+      safePrint(`[Render360 Phase 3] residency transition ${previous} -> ${next}: previous level is no longer a Render360 resident map; no future chamber was prefetched.`)
+    } else if(next === MENU_MAP) {
+      safePrint('[Render360 Phase 3] menu residency: background1 only; zero test chamber maps are staged or prefetched.')
+    } else {
+      safePrint(`[Render360 Phase 3] gameplay residency: ${next} only; zero earlier/future map payloads are staged by Render360.`)
+    }
+    safePhase(`phase3-${residency.mode}:${next}`)
+    return { changed: true, ...Module.render360MapResidency }
   }
 
   function retailDescriptorStats(descriptors) {
@@ -140,6 +232,7 @@
     Module.render360DirectVPKStats = stats
     Module.render360ResidentBytes = Number(Module.render360ResidentBytes || 0)
     Module.render360ResidentFiles = Number(Module.render360ResidentFiles || 0)
+    publishResidency()
     safePhase(`phase3-workerfs-ready:vpk=${stats.vpkFiles}:links=${links}`)
     safePrint(`[Render360 Phase 3] WORKERFS mounted ${stats.files} retail files (${stats.vpkFiles} VPKs, ${(stats.bytes / 1048576).toFixed(1)} MiB backing storage) with ${links} MEMFS symlinks; retail payload bytes remain outside MEMFS.`)
     return stats
@@ -183,7 +276,7 @@
       if(timeout) clearTimeout(timeout)
       Module.render360DirectVPKReady = true
       safePhase(`phase3-workers-ready:${mountedWorkers.size}`)
-      safePrint(`[Render360 Phase 3] ${mountedWorkers.size} pthread workers have zero-copy retail VPK access; background1 chunk preload is disabled.`)
+      safePrint(`[Render360 Phase 3] ${mountedWorkers.size} pthread workers have zero-copy retail VPK access; packed map preloads and Render360 map prefetch are disabled.`)
       if(dependencyHeld) {
         dependencyHeld = false
         removeRunDependency('render360-direct-vpk')
@@ -274,22 +367,32 @@
         if(isPthread && Module.render360DirectVPKMounted !== true) {
           throw new Error(`Phase 3 direct VPK requested before WORKERFS mount while loading ${mapName}`)
         }
+
+        // This is the core current-map-only rule. Do not call the compatibility
+        // loader, do not load background1 as a dependency of chambers, and do not
+        // walk mapsOrdered. The requested BSP becomes the sole Render360 map
+        // residency checkpoint while Source reads only the VPK ranges it asks for.
+        const transition = enterCurrentMap(mapName)
         this.setProgress?.(mapName, 1)
         const stats = Module.render360DirectVPKStats || Module.render360DirectRetailStats || {}
-        safePhase(`phase3-direct-map:${mapName}`)
-        safePrint(`[Render360 Phase 3] ${mapName}: skipped packed .data/MEMFS staging; Source will read retail VPKs lazily through WORKERFS (vpkFiles=${stats.vpkFiles || 0}).`)
+        const snapshot = globalThis.render360MemorySnapshot?.(`phase3-map-ready:${normalizeMapName(mapName)}`)
+        safePrint(`[Render360 Phase 3] ${normalizeMapName(mapName)}: current-map-only; skipped packed .data/MEMFS staging and all earlier/future map preloads. Source reads retail VPK ranges lazily through WORKERFS (vpkFiles=${stats.vpkFiles || 0}, generation=${transition.generation}, memory=${JSON.stringify(snapshot || {})}).`)
         return
       }
       return originalLoadMapWithDeps.call(this, mapName)
     }
   }
 
+  publishResidency()
   globalThis.render360Phase3 = {
     active: embeddedLauncher || isPthread,
     embeddedLauncher,
     isPthread,
     workerId,
     mountPoint: RETAIL_MOUNT,
-    expectedPoolWorkers: EXPECTED_POOL_WORKERS
+    expectedPoolWorkers: EXPECTED_POOL_WORKERS,
+    prefetchEnabled: false,
+    get currentMap() { return residency.currentMap },
+    get residency() { return { ...Module.render360MapResidency } }
   }
 })()
