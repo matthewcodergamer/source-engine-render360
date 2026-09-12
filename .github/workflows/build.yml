@@ -107,6 +107,7 @@ jobs:
           grep -q 'identitylightwarp.vtf' emscripten/portal-boot-overlay.js
           grep -q 'normalizedrandomdirections2d.vtf' emscripten/portal-boot-overlay.js
           grep -q 'Launch Phase 3' emscripten/assets/phase3-staging.js
+          grep -q 'render360Phase3DirectSelected' emscripten/assets/phase3-staging.js
           grep -q 'render360-retail-request' emscripten/assets/phase3-staging.js
           python3 - <<'PY'
           import re
@@ -213,7 +214,7 @@ jobs:
           new = (
               "        $('buildLocal').disabled=!selectedFromFolder;\n"
               "        $('launch').disabled=true;\n"
-              "        if(selectedFromFolder&&globalThis.Render360PortalBootOverlay){\n"
+              "        if(selectedFromFolder&&globalThis.Render360PortalBootOverlay&&!globalThis.render360Phase3DirectSelected){\n"
               "          try{\n"
               "            const boot=await Render360PortalBootOverlay.build(selectedPortalFiles,{log});\n"
               "            log('Local VPK boot overlay complete:',boot);\n"
@@ -221,8 +222,11 @@ jobs:
               "            log('Local VPK boot overlay failed:',error?.stack||String(error));\n"
               "          }\n"
               "        }\n"
+              "        if(globalThis.render360Phase3DirectSelected){\n"
+              "          log('Phase 3 direct VPK selected; skipped Phase 2 boot/chunk cache preparation.');\n"
+              "        }\n"
               "        await refresh(false);\n"
-              "        if(!lastChunkProbe.ok&&selectedFromFolder)await buildLocalFallback(true);"
+              "        if(!lastChunkProbe.ok&&selectedFromFolder&&!globalThis.render360Phase3DirectSelected)await buildLocalFallback(true);"
           )
           replace_once(old, new, 'ownership-success flow')
 
@@ -265,6 +269,8 @@ jobs:
 
           grep -q 'portal-boot-overlay.js' build/install/index.html
           grep -q 'assets/phase3-staging.js' build/install/index.html
+          grep -q 'render360Phase3DirectSelected' build/install/index.html
+          grep -q 'skipped Phase 2 boot/chunk cache preparation' build/install/index.html
           grep -q 'Render360PortalBootOverlay.build' build/install/index.html
           grep -q 'Render360PortalBootOverlay.hasOverlay' build/install/index.html
           grep -q 'chunk.ok&&bootReady&&!buildingLocal' build/install/index.html
