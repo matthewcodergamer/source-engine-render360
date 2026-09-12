@@ -5,16 +5,38 @@
     <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
     <title>Render360 Portal upstream baseline</title>
     <style>{{{ SHELL_CSS }}}</style>
-	<style>
-		body {
-			background: #111;
-			color: #fff;
-		}
+    <style>
+      body {
+        background: #111;
+        color: #fff;
+      }
 
-		body #emscripten_logo {
-			width: 200px;
-		}
-	</style>
+      body #emscripten_logo {
+        width: 200px;
+      }
+
+      #render360_diagnostics {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 0 4px;
+      }
+
+      #render360_diagnostics button {
+        appearance: none;
+        border: 1px solid rgba(255,255,255,.22);
+        border-radius: 999px;
+        background: rgba(255,255,255,.09);
+        color: #fff;
+        padding: 7px 12px;
+        font: inherit;
+      }
+
+      #render360_diagnostic_status {
+        color: #aaa;
+        font: 12px ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+    </style>
   </head>
   <body>
     <a href="http://emscripten.org"><img id="emscripten_logo" src="assets/portal.svg"></a>
@@ -33,49 +55,109 @@
     <div class="emscripten_border">
       <canvas class="emscripten" id="canvas" oncontextmenu="event.preventDefault()" tabindex=-1></canvas>
     </div>
-    <textarea id="output" rows="8"></textarea>
+
+    <div id="render360_diagnostics">
+      <button type="button" onclick="render360CopyDiagnostics()">Copy diagnostics</button>
+      <span id="render360_diagnostic_status">Log kept off-screen to save memory</span>
+    </div>
 
     <script type='text/javascript'>
       var statusElement = document.getElementById('status');
       var progressElement = document.getElementById('progress');
       var spinnerElement = document.getElementById('spinner');
       var canvasElement = document.getElementById('canvas');
-      var outputElement = document.getElementById('output');
+      var diagnosticStatusElement = document.getElementById('render360_diagnostic_status');
 
-      // Source is extremely chatty during module/material startup. Repeatedly
-      // doing textarea.value += line makes WebKit copy an ever-growing string on
-      // every log line, which creates transient memory exactly while the Wasm
-      // heap and SIDE_MODULE compilation are at their peak. Keep only a compact
-      // tail on the constrained iPhone runtime and batch DOM writes to one/frame.
-      var render360OutputBuffer = '';
-      var render360OutputFlushPending = false;
-      var RENDER360_OUTPUT_MAX_CHARS = 65536;
-      if (outputElement) outputElement.value = '';
+      // Do not mirror Source's very chatty startup log into a textarea/pre.
+      // WebKit otherwise owns both the JS string and a second DOM text backing
+      // store, and each update can transiently copy the whole log. Keep a small
+      // chunked tail only; join it only if the tester taps Copy diagnostics.
+      var render360LogChunks = [];
+      var render360LogHead = 0;
+      var render360LogChars = 0;
+      var RENDER360_LOG_MAX_CHARS = 65536;
 
       function render360AppendOutput(text) {
-        if (!outputElement) return;
-        render360OutputBuffer += String(text) + '\n';
-        if (render360OutputBuffer.length > RENDER360_OUTPUT_MAX_CHARS) {
-          render360OutputBuffer = render360OutputBuffer.slice(-RENDER360_OUTPUT_MAX_CHARS);
+        var line = String(text) + '\n';
+        if (line.length > RENDER360_LOG_MAX_CHARS) line = line.slice(-RENDER360_LOG_MAX_CHARS);
+        render360LogChunks.push(line);
+        render360LogChars += line.length;
+
+        while (render360LogChars > RENDER360_LOG_MAX_CHARS && render360LogHead < render360LogChunks.length - 1) {
+          render360LogChars -= render360LogChunks[render360LogHead].length;
+          render360LogChunks[render360LogHead] = '';
+          render360LogHead++;
         }
-        if (render360OutputFlushPending) return;
-        render360OutputFlushPending = true;
-        var flush = function() {
-          render360OutputFlushPending = false;
-          if (!outputElement) return;
-          outputElement.value = render360OutputBuffer;
-          outputElement.scrollTop = outputElement.scrollHeight;
-        };
-        if (typeof requestAnimationFrame === 'function') requestAnimationFrame(flush);
-        else setTimeout(flush, 16);
+        if (render360LogHead > 256) {
+          render360LogChunks = render360LogChunks.slice(render360LogHead);
+          render360LogHead = 0;
+        }
+      }
+
+      function render360DiagnosticText() {
+        var log = render360LogChunks.slice(render360LogHead).join('');
+        if (log.length > RENDER360_LOG_MAX_CHARS) log = log.slice(-RENDER360_LOG_MAX_CHARS);
+        var lines = [
+          'Render360 Portal diagnostics',
+          'captured=' + new Date().toISOString(),
+          'url=' + location.href,
+          'status=' + (statusElement ? statusElement.textContent : ''),
+          'crossOriginIsolated=' + String(window.crossOriginIsolated === true),
+          'SharedArrayBuffer=' + typeof SharedArrayBuffer,
+          'OffscreenCanvas=' + typeof OffscreenCanvas,
+          'WebGL2=' + String(!!document.createElement('canvas').getContext('webgl2')),
+          '',
+          '--- buffered runtime log (latest 64 KiB) ---',
+          log
+        ];
+        try {
+          var crashState = localStorage.getItem('render360-ios-crash-state-v2');
+          if (crashState) lines.splice(8, 0, 'crashState=' + crashState);
+          var lastError = localStorage.getItem('render360-ios-last-error-v1');
+          if (lastError) lines.splice(9, 0, 'lastError=' + lastError);
+        } catch (_) {}
+        return lines.join('\n');
+      }
+
+      async function render360CopyDiagnostics() {
+        var text = render360DiagnosticText();
+        try {
+          if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+            await navigator.clipboard.writeText(text);
+          } else {
+            var temporary = document.createElement('textarea');
+            temporary.value = text;
+            temporary.setAttribute('readonly', '');
+            temporary.style.position = 'fixed';
+            temporary.style.opacity = '0';
+            document.body.appendChild(temporary);
+            temporary.select();
+            document.execCommand('copy');
+            temporary.remove();
+          }
+          if (diagnosticStatusElement) diagnosticStatusElement.textContent = 'Copied ' + Math.ceil(text.length / 1024) + ' KiB';
+          return true;
+        } catch (error) {
+          if (diagnosticStatusElement) diagnosticStatusElement.textContent = 'Copy failed: ' + String(error && error.message ? error.message : error);
+          return false;
+        }
       }
 
       function render360Report(kind, message, error) {
         var stack = error && error.stack ? '\n' + error.stack : '';
-        var detail = '[Render360 ' + kind + '] ' + String(message || '<no message>') + stack;
+        var concise = '[Render360 ' + kind + '] ' + String(message || '<no message>');
+        var detail = concise + stack;
         console.error(detail);
         render360AppendOutput(detail);
-        if (statusElement) statusElement.textContent = detail;
+        if (statusElement) statusElement.textContent = concise;
+        try {
+          localStorage.setItem('render360-ios-last-error-v1', JSON.stringify({
+            at: Date.now(),
+            kind: String(kind || 'error'),
+            message: String(message || '<no message>').slice(-4096),
+            stack: stack.slice(-8192)
+          }));
+        } catch (_) {}
         return detail;
       }
 
@@ -84,7 +166,7 @@
           var target = canvasElement;
           var request = target.requestFullscreen || target.webkitRequestFullscreen;
           if (typeof request !== 'function') {
-            console.info('[Render360 fullscreen] Element fullscreen is unavailable on this Safari build; continuing inline.');
+            render360AppendOutput('[Render360 fullscreen] Element fullscreen is unavailable on this Safari build; continuing inline.');
             return false;
           }
           var result = request.call(target);
@@ -101,20 +183,17 @@
         e.preventDefault();
       }, false);
       canvasElement.addEventListener('webglcontextrestored', () => {
-        console.warn('[Render360 WebGL context restored]');
         render360AppendOutput('[Render360 WebGL context restored]');
       }, false);
 
-	  canvasElement.widthNative = screen.availWidth
-	  canvasElement.heightNative = screen.availHeight
+      canvasElement.widthNative = screen.availWidth;
+      canvasElement.heightNative = screen.availHeight;
 
       var Module = {
         print(...args) {
-          console.log(...args);
           render360AppendOutput(args.join(' '));
         },
         printErr(...args) {
-          console.error(...args);
           render360AppendOutput('[stderr] ' + args.join(' '));
         },
         canvas: canvasElement,
@@ -128,8 +207,8 @@
           Module.setStatus.last.text = text;
           if (m) {
             text = m[1];
-            progressElement.value = parseInt(m[2])*100;
-            progressElement.max = parseInt(m[4])*100;
+            progressElement.value = parseInt(m[2]) * 100;
+            progressElement.max = parseInt(m[4]) * 100;
             progressElement.hidden = false;
             spinnerElement.hidden = false;
           } else {
@@ -167,9 +246,9 @@
         );
       });
 
-      console.log('[Render360 baseline] crossOriginIsolated=', window.crossOriginIsolated,
-        'SharedArrayBuffer=', typeof SharedArrayBuffer,
-        'OffscreenCanvas=', typeof OffscreenCanvas);
+      render360AppendOutput('[Render360 baseline] crossOriginIsolated=' + String(window.crossOriginIsolated) +
+        ' SharedArrayBuffer=' + typeof SharedArrayBuffer +
+        ' OffscreenCanvas=' + typeof OffscreenCanvas);
     </script>
     {{{ SCRIPT }}}
   </body>

@@ -17,8 +17,8 @@
     button.secondary,.fileButton.secondary{background:rgba(255,255,255,.09);color:#f4f7fb;border:1px solid rgba(255,255,255,.09)}button:disabled{opacity:.4;cursor:default}
     .actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:14px}input[type=file]{display:none}.small{color:#95a1b0;font-size:13px;line-height:1.5}
     progress{width:100%;height:10px;margin-top:12px;accent-color:#f4f7fb}
-    pre{white-space:pre-wrap;word-break:break-word;max-height:330px;overflow:auto;background:#07090b;border-radius:12px;padding:12px;color:#c9d3df;font-size:12px}
     code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.sourceBadge{font-weight:750}
+    #logSummary{margin:10px 0 0;min-height:1.5em;overflow-wrap:anywhere}
   </style>
 </head>
 <body>
@@ -69,36 +69,107 @@
   <section class="card">
     <strong>Run</strong>
     <p id="launchHint" class="small">Checking whether the threaded runtime can start…</p>
+    <div class="row"><span class="name">Last runtime</span><span id="lastRuntime" class="value">none recorded</span></div>
     <div class="actions">
       <button id="launch" type="button" disabled>Launch upstream baseline</button>
       <button id="reload" class="secondary" type="button">Reload isolation</button>
     </div>
   </section>
 
-  <section class="card"><strong>Device log</strong><pre id="log"></pre></section>
+  <section class="card">
+    <strong>Diagnostics</strong>
+    <p id="logSummary" class="small">Detailed text is kept off-screen to avoid a growing DOM log on iPhone.</p>
+    <div class="actions">
+      <button id="copyLog" class="secondary" type="button">Copy diagnostics</button>
+      <button id="clearLog" class="secondary" type="button">Clear buffered log</button>
+    </div>
+  </section>
 </main>
 <script src="./portal-local-vpk.js"></script>
 <script>
 (() => {
   'use strict';
   const OWNERSHIP_KEY='render360PortalOwnershipVerified';
+  const CRASH_STATE_KEY='render360-ios-crash-state-v2';
   const $=id=>document.getElementById(id);
-  const logLines=[];
+  const LOG_MAX_CHARS=65536;
+  let logChunks=[];
+  let logHead=0;
+  let logChars=0;
   let selectedPortalFiles=[];
   let selectedFromFolder=false;
   let buildingLocal=false;
   let lastChunkProbe={ok:false,source:'unavailable'};
 
+  const safeString=x=>{
+    if(typeof x==='string')return x;
+    try{return JSON.stringify(x)}catch(_){return String(x)}
+  };
+  const appendLogLine=line=>{
+    line=String(line)+'\n';
+    if(line.length>LOG_MAX_CHARS)line=line.slice(-LOG_MAX_CHARS);
+    logChunks.push(line);logChars+=line.length;
+    while(logChars>LOG_MAX_CHARS&&logHead<logChunks.length-1){logChars-=logChunks[logHead].length;logChunks[logHead]='';logHead++}
+    if(logHead>256){logChunks=logChunks.slice(logHead);logHead=0}
+  };
+  const logText=()=>{
+    let text=logChunks.slice(logHead).join('');
+    if(text.length>LOG_MAX_CHARS)text=text.slice(-LOG_MAX_CHARS);
+    return text;
+  };
   const log=(...args)=>{
-    const line=args.map(x=>typeof x==='string'?x:JSON.stringify(x)).join(' ');
-    logLines.push(line);
-    if(logLines.length>700)logLines.splice(0,logLines.length-700);
-    $('log').textContent=logLines.join('\n');
-    $('log').scrollTop=$('log').scrollHeight;
-    console.log('[Render360 baseline]',...args);
+    const line=args.map(safeString).join(' ');
+    appendLogLine(line);
+    const summary=$('logSummary');
+    if(summary)summary.textContent=line.length>220?line.slice(0,217)+'…':line;
   };
   const set=(id,ok,text,warning=false)=>{
     const el=$(id);el.textContent=text;el.className='value '+(ok?'ok':warning?'warn':'bad');
+  };
+  const readCrashState=()=>{
+    try{return JSON.parse(localStorage.getItem(CRASH_STATE_KEY)||'null')}catch(_){return null}
+  };
+  const markManualRelaunch=()=>{
+    const state=readCrashState();
+    if(!state)return;
+    state.active=false;state.blocked=false;state.phase='manual-relaunch';state.updatedAt=Date.now();
+    try{localStorage.setItem(CRASH_STATE_KEY,JSON.stringify(state))}catch(_){}
+  };
+  const updateLastRuntime=()=>{
+    const state=readCrashState();
+    if(!state){set('lastRuntime',false,'none recorded',true);return}
+    const phase=String(state.phase||'unknown');
+    const when=Number(state.updatedAt||0);
+    const stamp=when?new Date(when).toLocaleTimeString():'';
+    if(state.active===true)set('lastRuntime',false,`interrupted · ${phase}${stamp?' · '+stamp:''}`,true);
+    else set('lastRuntime',true,`${phase}${stamp?' · '+stamp:''}`);
+  };
+  const diagnosticText=()=>{
+    const state=readCrashState();
+    return [
+      'Render360 Portal staging diagnostics',
+      'captured='+new Date().toISOString(),
+      'url='+location.href,
+      'crossOriginIsolated='+String(window.crossOriginIsolated===true),
+      'SharedArrayBuffer='+typeof SharedArrayBuffer,
+      'OffscreenCanvas='+typeof OffscreenCanvas,
+      'ownershipVerified='+String(ownershipVerified()),
+      'chunkSource='+String(lastChunkProbe.source||'unavailable'),
+      'crashState='+(state?JSON.stringify(state):'none'),
+      '',
+      '--- buffered staging log (latest 64 KiB) ---',
+      logText()
+    ].join('\n');
+  };
+  const copyDiagnostics=async()=>{
+    const text=diagnosticText();
+    try{
+      if(navigator.clipboard&&navigator.clipboard.writeText)await navigator.clipboard.writeText(text);
+      else{
+        const temp=document.createElement('textarea');temp.value=text;temp.setAttribute('readonly','');temp.style.position='fixed';temp.style.opacity='0';document.body.appendChild(temp);temp.select();document.execCommand('copy');temp.remove();
+      }
+      $('logSummary').textContent=`Copied ${Math.ceil(text.length/1024)} KiB of diagnostics.`;
+    }catch(error){$('logSummary').textContent='Copy failed: '+String(error?.message||error)}
   };
 
   async function ensureServiceWorker(){
@@ -268,6 +339,7 @@
 
     set('coi',coi,String(coi));set('sab',sab,sab?'available':'missing');set('wasmThreads',wasmThreads,wasmThreads?'available':'unavailable');
     set('offscreen',offscreen,offscreen?'available':'missing',!offscreen);set('webgl2',webgl2,webgl2?'available':'missing');set('ownership',verified,verified?'verified this session':'not verified',!verified);
+    updateLastRuntime();
 
     const runtimeChecks=await Promise.all([exists('./hl2_launcher.html'),exists('./hl2_launcher.js'),exists('./hl2_launcher.wasm')]);
     const runtimeReady=runtimeChecks.every(Boolean);set('runtime',runtimeReady,runtimeReady?'launcher + JS + Wasm':'incomplete');
@@ -308,11 +380,13 @@
   $('retryChunk').addEventListener('click',()=>refresh());
   $('buildLocal').addEventListener('click',()=>buildLocalFallback(false));
   $('clearLocal').addEventListener('click',async()=>{if(globalThis.Render360PortalVPK)await Render360PortalVPK.clearLocalChunks();if(navigator.serviceWorker.controller)navigator.serviceWorker.controller.postMessage({type:'RENDER360_CLEAR_LOCAL_CHUNKS'});$('localProgress').hidden=true;$('localProgressText').textContent='Local VPK chunks cleared.';await refresh()});
-  $('launch').addEventListener('click',()=>{location.href='./hl2_launcher.html'});
+  $('copyLog').addEventListener('click',copyDiagnostics);
+  $('clearLog').addEventListener('click',()=>{logChunks=[];logHead=0;logChars=0;$('logSummary').textContent='Buffered diagnostics cleared.'});
+  $('launch').addEventListener('click',()=>{markManualRelaunch();location.href='./hl2_launcher.html'});
   $('reload').addEventListener('click',()=>{sessionStorage.removeItem('render360PagesReloaded');location.reload()});
   window.addEventListener('error',event=>log('Page error:',event.message||event.type,event.error?.stack||''));
   window.addEventListener('unhandledrejection',event=>log('Unhandled rejection:',event.reason?.stack||String(event.reason)));
-  (async()=>{await ensureServiceWorker();await refresh()})();
+  (async()=>{updateLastRuntime();await ensureServiceWorker();await refresh()})();
 })();
 </script>
 </body>

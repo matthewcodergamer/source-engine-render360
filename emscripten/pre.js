@@ -4,14 +4,21 @@
 // expensive startup and make the situation worse. Persist the last launch phase
 // so a process-kill reload is stopped before main() runs again.
 const RENDER360_IOS_CRASH_STATE_KEY = 'render360-ios-crash-state-v2'
-const render360LaunchId = new URLSearchParams(location.search).get('render360') || location.pathname
+const RENDER360_IOS_CRASH_CHANNEL = 'render360-ios-crash-state-channel-v1'
+const render360IsWindow = typeof window !== 'undefined' && typeof document !== 'undefined'
+// Use one stable id in both Window and WorkerGlobalScope. Worker location points
+// at hl2_launcher.worker.js, so location.pathname cannot be used as a shared id.
+const render360LaunchId = 'portal-upstream-baseline'
 const render360Now = Date.now()
 let render360PreviousState = null
-try {
-	render360PreviousState = JSON.parse(localStorage.getItem(RENDER360_IOS_CRASH_STATE_KEY) || 'null')
-} catch(_) {}
+if(render360IsWindow) {
+	try {
+		render360PreviousState = JSON.parse(localStorage.getItem(RENDER360_IOS_CRASH_STATE_KEY) || 'null')
+	} catch(_) {}
+}
 
 const render360ProbableProcessReload = !!(
+	render360IsWindow &&
 	render360PreviousState &&
 	render360PreviousState.active === true &&
 	render360PreviousState.launchId === render360LaunchId &&
@@ -31,6 +38,13 @@ const render360CrashState = {
 	previous: render360ProbableProcessReload ? render360PreviousState : null
 }
 
+let render360CrashChannel = null
+try {
+	if(typeof BroadcastChannel === 'function') {
+		render360CrashChannel = new BroadcastChannel(RENDER360_IOS_CRASH_CHANNEL)
+	}
+} catch(_) {}
+
 function render360ReadWasmHeapBytes() {
 	try {
 		if(typeof HEAPU8 !== 'undefined' && HEAPU8?.buffer) return HEAPU8.buffer.byteLength || 0
@@ -38,12 +52,22 @@ function render360ReadWasmHeapBytes() {
 	return 0
 }
 
+function render360WriteCrashState(state) {
+	if(render360IsWindow) {
+		try { localStorage.setItem(RENDER360_IOS_CRASH_STATE_KEY, JSON.stringify(state)) } catch(_) {}
+		return
+	}
+	if(render360CrashChannel) {
+		try { render360CrashChannel.postMessage({ type: 'render360-crash-state', state }) } catch(_) {}
+	}
+}
+
 function render360PersistCrashState() {
 	render360CrashState.updatedAt = Date.now()
 	render360CrashState.wasmHeapBytes = render360ReadWasmHeapBytes()
 	render360CrashState.memfsBytes = Number(Module.render360ResidentBytes || 0)
 	render360CrashState.memfsFiles = Number(Module.render360ResidentFiles || 0)
-	try { localStorage.setItem(RENDER360_IOS_CRASH_STATE_KEY, JSON.stringify(render360CrashState)) } catch(_) {}
+	render360WriteCrashState(render360CrashState)
 }
 
 function render360SetPhase(phase) {
@@ -63,6 +87,25 @@ globalThis.render360MemorySnapshot = (phase) => {
 	}
 }
 
+// Worker-side phase changes matter most for PROXY_TO_PTHREAD. Relay them to
+// the Window so localStorage still contains the last worker phase if WebKit
+// kills the process and reloads the launcher.
+if(render360IsWindow && render360CrashChannel) {
+	render360CrashChannel.addEventListener('message', event => {
+		const incoming = event?.data?.type === 'render360-crash-state' ? event.data.state : null
+		if(!incoming || incoming.launchId !== render360LaunchId) return
+		if(Number(incoming.updatedAt || 0) < Number(render360CrashState.updatedAt || 0)) return
+		render360CrashState.active = incoming.active !== false
+		render360CrashState.blocked = false
+		render360CrashState.phase = String(incoming.phase || render360CrashState.phase)
+		render360CrashState.updatedAt = Number(incoming.updatedAt || Date.now())
+		render360CrashState.wasmHeapBytes = Number(incoming.wasmHeapBytes || render360CrashState.wasmHeapBytes || 0)
+		render360CrashState.memfsBytes = Number(incoming.memfsBytes || render360CrashState.memfsBytes || 0)
+		render360CrashState.memfsFiles = Number(incoming.memfsFiles || render360CrashState.memfsFiles || 0)
+		try { localStorage.setItem(RENDER360_IOS_CRASH_STATE_KEY, JSON.stringify(render360CrashState)) } catch(_) {}
+	})
+}
+
 if(render360ProbableProcessReload) {
 	// noInitialRun prevents the expensive Source main()/map/module startup from
 	// being executed a second time. The launcher can still render diagnostics.
@@ -71,7 +114,7 @@ if(render360ProbableProcessReload) {
 	setTimeout(() => {
 		const heap = Math.round(Number(previous.wasmHeapBytes || 0) / 1048576)
 		const memfs = Math.round(Number(previous.memfsBytes || 0) / 1048576)
-		const message = `[Render360 iOS guard] Safari restarted this launcher after a probable WebContent/GPU process kill. Previous phase=${previous.phase || 'unknown'}, wasmHeap=${heap} MiB, trackedMEMFS=${memfs} MiB. Return to the staging page and launch a fresh attempt after the low-memory build is deployed.`
+		const message = `[Render360 iOS guard] Safari restarted this launcher after a probable WebContent/GPU process kill. Previous phase=${previous.phase || 'unknown'}, wasmHeap=${heap} MiB, trackedMEMFS=${memfs} MiB. Use Copy diagnostics, then return to the staging page for a deliberate fresh launch.`
 		Module.printErr?.(message)
 		if(typeof statusElement !== 'undefined' && statusElement) statusElement.textContent = message
 		if(typeof spinnerElement !== 'undefined' && spinnerElement) spinnerElement.style.display = 'none'
@@ -101,17 +144,21 @@ Module.printErr = (...args) => {
 	render360OriginalPrintErr(...args)
 }
 
-const render360Heartbeat = setInterval(() => {
-	if(render360CrashState.active) render360PersistCrashState()
-}, 3000)
-window.addEventListener('pagehide', () => {
-	clearInterval(render360Heartbeat)
-	if(!render360CrashState.blocked) {
-		render360CrashState.active = false
-		render360CrashState.phase = 'clean-pagehide'
-		render360PersistCrashState()
-	}
-}, { once: true })
+let render360Heartbeat = 0
+if(render360IsWindow) {
+	render360Heartbeat = setInterval(() => {
+		if(render360CrashState.active) render360PersistCrashState()
+	}, 3000)
+	window.addEventListener('pagehide', () => {
+		if(render360Heartbeat) clearInterval(render360Heartbeat)
+		if(!render360CrashState.blocked) {
+			render360CrashState.active = false
+			render360CrashState.phase = 'clean-pagehide'
+			render360PersistCrashState()
+		}
+		try { render360CrashChannel?.close() } catch(_) {}
+	}, { once: true })
+}
 
 // Keep packaged SIDE_MODULE bytes as ordinary MEMFS files. Source performs its
 // own runtime dlopen() calls and must not race Emscripten's preload-file Wasm
@@ -189,6 +236,9 @@ class DataLoader {
 	}
 
 	async setProgress(mapName, progress) {
+		// This class is also present when hl2_launcher.js is imported by a pthread.
+		// Never assume DOM globals exist in WorkerGlobalScope.
+		if(typeof spinnerElement === 'undefined' || typeof statusElement === 'undefined' || typeof progressElement === 'undefined') return
 		if(progress < 1) {
 			spinnerElement.style.display = ''
 			statusElement.innerText = `Loading map data ${mapName}`

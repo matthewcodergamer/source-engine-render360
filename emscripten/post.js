@@ -30,19 +30,28 @@
 })();
 
 // Diagnostic-only addition for PROXY_TO_PTHREAD / worker-side failures.
-// This intentionally does not alter Source threading or synchronization.
+// Keep this WorkerGlobalScope-safe: hl2_launcher.js is imported by pthreads and
+// there is deliberately no `window` object in those workers.
 if (typeof globalThis !== 'undefined' && globalThis.addEventListener) {
 	globalThis.addEventListener('error', event => {
 		const error = event && event.error
+		const message = event && (event.message || event.type) || 'worker/global error'
+		if (typeof globalThis.render360SetPhase === 'function') {
+			globalThis.render360SetPhase(`worker-error:${String(message).slice(0, 160)}`)
+		}
 		console.error(
 			'[Render360 worker/global error]',
-			event && (event.message || event.type),
+			message,
 			error && error.stack ? error.stack : error || ''
 		)
 	})
 
 	globalThis.addEventListener('unhandledrejection', event => {
 		const reason = event && event.reason
+		const message = reason && reason.message ? reason.message : String(reason)
+		if (typeof globalThis.render360SetPhase === 'function') {
+			globalThis.render360SetPhase(`worker-unhandled-rejection:${message.slice(0, 160)}`)
+		}
 		console.error(
 			'[Render360 worker/global unhandled rejection]',
 			reason && reason.stack ? reason.stack : reason
