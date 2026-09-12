@@ -9,6 +9,34 @@ fi
 export CC=emcc
 export CXX=em++
 
+# Phase 4 experimental memory profile. The branch defaults to a smaller shared
+# heap than the Phase 3 baseline, while keeping an explicit maximum and linear
+# growth policy. CI/workflow_dispatch can override these values for A/B testing.
+RENDER360_EMSCRIPTEN_VERSION="${RENDER360_EMSCRIPTEN_VERSION:-6.0.6}"
+RENDER360_INITIAL_MEMORY_MB="${RENDER360_INITIAL_MEMORY_MB:-320}"
+RENDER360_MAXIMUM_MEMORY_MB="${RENDER360_MAXIMUM_MEMORY_MB:-1024}"
+RENDER360_MEMORY_GROWTH_LINEAR_STEP_MB="${RENDER360_MEMORY_GROWTH_LINEAR_STEP_MB:-32}"
+RENDER360_GROWABLE_ARRAYBUFFERS="${RENDER360_GROWABLE_ARRAYBUFFERS:-1}"
+
+for value in \
+	"$RENDER360_INITIAL_MEMORY_MB" \
+	"$RENDER360_MAXIMUM_MEMORY_MB" \
+	"$RENDER360_MEMORY_GROWTH_LINEAR_STEP_MB" \
+	"$RENDER360_GROWABLE_ARRAYBUFFERS"
+do
+	case "$value" in
+		''|*[!0-9]*) echo "Render360 Phase 4: memory profile values must be integers" >&2; exit 1 ;;
+	esac
+done
+if [ "$RENDER360_INITIAL_MEMORY_MB" -gt "$RENDER360_MAXIMUM_MEMORY_MB" ]; then
+	echo "Render360 Phase 4: INITIAL_MEMORY cannot exceed MAXIMUM_MEMORY" >&2
+	exit 1
+fi
+if [ "$RENDER360_GROWABLE_ARRAYBUFFERS" -ne 1 ]; then
+	echo "Render360 Phase 4: this branch requires GROWABLE_ARRAYBUFFERS=1" >&2
+	exit 1
+fi
+
 set -ex
 
 # Keep Source's upstream pthread/SharedArrayBuffer architecture intact, but stop
@@ -147,32 +175,62 @@ for lib in build/install/*.so; do
 	preload_libs="$preload_libs --preload-file $lib@/$base"
 done
 
-# iPhone Safari has a relatively tight WebContent process budget. At startup
-# Portal simultaneously holds the shared Wasm heap, Wasm SIDE_MODULE bytes/JIT
-# code, pthread stacks and WebGL resources. Phase 3 removes the retail map/VPK
-# payload from MEMFS: the staging page keeps the user's File objects alive and
-# forwards them to the Source pthread where WORKERFS exposes them read-only.
-# Source then opens the retail VPKs and performs its own range reads on demand.
-# WORKERFS is not part of the default JS filesystem, so link it explicitly.
+mkdir -p build
+cat > build/render360-phase4-config.js <<EOF
+Module['render360Phase4BuildConfig'] = {
+  emscripten: '$RENDER360_EMSCRIPTEN_VERSION',
+  initialMemoryMiB: $RENDER360_INITIAL_MEMORY_MB,
+  maximumMemoryMiB: $RENDER360_MAXIMUM_MEMORY_MB,
+  linearGrowthMiB: $RENDER360_MEMORY_GROWTH_LINEAR_STEP_MB,
+  growableArrayBuffers: $RENDER360_GROWABLE_ARRAYBUFFERS
+};
+EOF
+
+# Phase 4 keeps Phase 3's direct-VPK/current-map-only architecture, but moves to
+# a modern Emscripten runtime and explicitly enables growable Wasm memory views.
+# GROWABLE_ARRAYBUFFERS=1 auto-detects resizable WebAssembly memory buffers and
+# falls back on browsers that do not expose the API. This branch intentionally
+# keeps pthreads/SharedArrayBuffer/PROXY_TO_PTHREAD so we can isolate the memory
+# runtime change before attempting the Phase 5 single-thread fallback.
 EMCC_FORCE_STDLIBS=libc,libc++,libc++abi emcc -Os \
 	-sUSE_BZIP2=1 -sUSE_SDL=2 -sUSE_FREETYPE=1 -sUSE_LIBJPEG=1 -sUSE_LIBPNG -sMALLOC=dlmalloc \
 	-sMAIN_MODULE -sINCLUDE_FULL_LIBRARY=1 \
-	-sINITIAL_MEMORY=384mb -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=1024mb -sMEMORY_GROWTH_LINEAR_STEP=32mb \
+	-sINITIAL_MEMORY=${RENDER360_INITIAL_MEMORY_MB}mb -sALLOW_MEMORY_GROWTH=1 \
+	-sMAXIMUM_MEMORY=${RENDER360_MAXIMUM_MEMORY_MB}mb \
+	-sMEMORY_GROWTH_LINEAR_STEP=${RENDER360_MEMORY_GROWTH_LINEAR_STEP_MB}mb \
+	-sGROWABLE_ARRAYBUFFERS=${RENDER360_GROWABLE_ARRAYBUFFERS} \
 	-sSHARED_MEMORY=1 -sUSE_PTHREADS -sPTHREAD_POOL_SIZE=2 -sPTHREAD_POOL_SIZE_STRICT=0 \
 	-sFULL_ES3 -sSTACK_SIZE=4mb -sDEFAULT_PTHREAD_STACK_SIZE=1mb --shell-file=emscripten/shell.html \
 	-sASSERTIONS=1 -sSTACK_OVERFLOW_CHECK=1 \
 	-sPROXY_TO_PTHREAD -sOFFSCREENCANVASES_TO_PTHREAD="#canvas" -sOFFSCREENCANVAS_SUPPORT=1 \
 	-lworkerfs.js \
+	--pre-js build/render360-phase4-config.js \
+	--pre-js emscripten/phase4-memory-profile.js \
 	--pre-js emscripten/pre.js \
 	--post-js emscripten/phase3-workerfs.js --post-js emscripten/post.js \
 	$preload_libs \
 	build/launcher_main/libhl2_launcher.a \
 	-o build/launcher_main/hl2_launcher.html
 
-# Record deploy sizes in CI so future regressions that grow the threaded Wasm
-# or SIDE_MODULE package are visible before they become another iPhone reload.
+cat > build/install/render360-phase4-profile.json <<EOF
+{
+  "profile": "phase4-growable-arraybuffers",
+  "emscripten": "$RENDER360_EMSCRIPTEN_VERSION",
+  "initialMemoryMiB": $RENDER360_INITIAL_MEMORY_MB,
+  "maximumMemoryMiB": $RENDER360_MAXIMUM_MEMORY_MB,
+  "linearGrowthMiB": $RENDER360_MEMORY_GROWTH_LINEAR_STEP_MB,
+  "growableArrayBuffers": $RENDER360_GROWABLE_ARRAYBUFFERS,
+  "pthreadPoolSize": 2,
+  "directRetailVpk": true,
+  "currentMapOnly": true
+}
+EOF
+
+# Record deploy sizes in CI so the 320 MiB and 256 MiB experiments can be
+# compared against the 384 MiB Phase 3 baseline without guessing.
 ls -lh build/launcher_main/hl2_launcher.wasm build/launcher_main/hl2_launcher.data || true
 du -ch build/install/*.so | tail -n 1 || true
+cat build/install/render360-phase4-profile.json
 
 cp build/launcher_main/hl2_launcher.* build/install/
 cp -r emscripten/assets build/install/
