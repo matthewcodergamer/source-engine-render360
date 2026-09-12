@@ -1,3 +1,118 @@
+// Safari/iOS may terminate the WebContent process without giving Wasm a normal
+// exception when the Source startup peak crosses the device memory budget. The
+// browser then reloads the exact launcher URL, which can immediately repeat the
+// expensive startup and make the situation worse. Persist the last launch phase
+// so a process-kill reload is stopped before main() runs again.
+const RENDER360_IOS_CRASH_STATE_KEY = 'render360-ios-crash-state-v2'
+const render360LaunchId = new URLSearchParams(location.search).get('render360') || location.pathname
+const render360Now = Date.now()
+let render360PreviousState = null
+try {
+	render360PreviousState = JSON.parse(localStorage.getItem(RENDER360_IOS_CRASH_STATE_KEY) || 'null')
+} catch(_) {}
+
+const render360ProbableProcessReload = !!(
+	render360PreviousState &&
+	render360PreviousState.active === true &&
+	render360PreviousState.launchId === render360LaunchId &&
+	render360Now - Number(render360PreviousState.updatedAt || 0) < 3 * 60 * 1000
+)
+
+const render360CrashState = {
+	launchId: render360LaunchId,
+	active: !render360ProbableProcessReload,
+	blocked: render360ProbableProcessReload,
+	phase: render360ProbableProcessReload ? 'probable-process-kill-reload' : 'runtime-script-start',
+	startedAt: render360Now,
+	updatedAt: render360Now,
+	wasmHeapBytes: 0,
+	memfsBytes: 0,
+	memfsFiles: 0,
+	previous: render360ProbableProcessReload ? render360PreviousState : null
+}
+
+function render360ReadWasmHeapBytes() {
+	try {
+		if(typeof HEAPU8 !== 'undefined' && HEAPU8?.buffer) return HEAPU8.buffer.byteLength || 0
+	} catch(_) {}
+	return 0
+}
+
+function render360PersistCrashState() {
+	render360CrashState.updatedAt = Date.now()
+	render360CrashState.wasmHeapBytes = render360ReadWasmHeapBytes()
+	render360CrashState.memfsBytes = Number(Module.render360ResidentBytes || 0)
+	render360CrashState.memfsFiles = Number(Module.render360ResidentFiles || 0)
+	try { localStorage.setItem(RENDER360_IOS_CRASH_STATE_KEY, JSON.stringify(render360CrashState)) } catch(_) {}
+}
+
+function render360SetPhase(phase) {
+	render360CrashState.phase = String(phase || 'unknown')
+	render360PersistCrashState()
+}
+
+globalThis.render360SetPhase = render360SetPhase
+globalThis.render360MemorySnapshot = (phase) => {
+	if(phase) render360SetPhase(phase)
+	else render360PersistCrashState()
+	return {
+		phase: render360CrashState.phase,
+		wasmHeapMiB: Math.round(render360CrashState.wasmHeapBytes / 1048576),
+		memfsMiB: Math.round(render360CrashState.memfsBytes / 1048576),
+		memfsFiles: render360CrashState.memfsFiles
+	}
+}
+
+if(render360ProbableProcessReload) {
+	// noInitialRun prevents the expensive Source main()/map/module startup from
+	// being executed a second time. The launcher can still render diagnostics.
+	Module['noInitialRun'] = true
+	const previous = render360PreviousState || {}
+	setTimeout(() => {
+		const heap = Math.round(Number(previous.wasmHeapBytes || 0) / 1048576)
+		const memfs = Math.round(Number(previous.memfsBytes || 0) / 1048576)
+		const message = `[Render360 iOS guard] Safari restarted this launcher after a probable WebContent/GPU process kill. Previous phase=${previous.phase || 'unknown'}, wasmHeap=${heap} MiB, trackedMEMFS=${memfs} MiB. Return to the staging page and launch a fresh attempt after the low-memory build is deployed.`
+		Module.printErr?.(message)
+		if(typeof statusElement !== 'undefined' && statusElement) statusElement.textContent = message
+		if(typeof spinnerElement !== 'undefined' && spinnerElement) spinnerElement.style.display = 'none'
+	}, 0)
+} else {
+	render360PersistCrashState()
+}
+
+const render360OriginalPrint = typeof Module.print === 'function' ? Module.print.bind(Module) : console.log.bind(console)
+const render360OriginalPrintErr = typeof Module.printErr === 'function' ? Module.printErr.bind(Module) : console.error.bind(console)
+function render360ObserveRuntimeLine(args) {
+	const text = args.map(value => String(value)).join(' ')
+	let match = text.match(/LoadLibrary:\s*path:\s*(\S+)/)
+	if(match) render360SetPhase(`dlopen-start:${match[1]}`)
+	match = text.match(/Render360:\s*loaded module:\s*(\S+)/)
+	if(match) render360SetPhase(`dlopen-done:${match[1]}`)
+	if(text.includes('IDirect3DDevice9::Create')) render360SetPhase('renderer-device-created')
+	if(text.includes('server.so loaded')) render360SetPhase('server-module-ready')
+	if(text.includes('Precache:')) render360SetPhase('shader-precache-finished')
+}
+Module.print = (...args) => {
+	render360ObserveRuntimeLine(args)
+	render360OriginalPrint(...args)
+}
+Module.printErr = (...args) => {
+	render360ObserveRuntimeLine(args)
+	render360OriginalPrintErr(...args)
+}
+
+const render360Heartbeat = setInterval(() => {
+	if(render360CrashState.active) render360PersistCrashState()
+}, 3000)
+window.addEventListener('pagehide', () => {
+	clearInterval(render360Heartbeat)
+	if(!render360CrashState.blocked) {
+		render360CrashState.active = false
+		render360CrashState.phase = 'clean-pagehide'
+		render360PersistCrashState()
+	}
+}, { once: true })
+
 // Keep packaged SIDE_MODULE bytes as ordinary MEMFS files. Source performs its
 // own runtime dlopen() calls and must not race Emscripten's preload-file Wasm
 // decoder on the same .so names.
@@ -14,6 +129,7 @@ Module['dynamicLibraries'] = ['liblauncher.so']
 
 Module['preRun'] = Module['preRun'] || []
 Module['preRun'].push(() => {
+	render360SetPhase('prerun-liblauncher-ready')
 	Module.print?.('[Render360] load-time liblauncher preload requested')
 })
 
@@ -51,14 +167,13 @@ class DataLoader {
 
 	loadedMaps = {}
 	bootOverlayPromise = null
+	residentBytes = 0
+	residentFileSizes = new Map()
 
 	async loadMapWithDeps(mapName) {
 		const index = this.mapsOrdered.indexOf(mapName)
 		if(index === -1) throw new Error(`no such map: ${mapName}`)
 
-		// Finish the bootstrap/shader overlay before the large background chunk.
-		// Both are streamed record-by-record below, so Safari never needs a 51 MiB
-		// overlay ArrayBuffer or a 221 MiB background ArrayBuffer at once.
 		await this.loadBootOverlay()
 
 		for(let i = 0; i < index + 1; i++) {
@@ -95,17 +210,22 @@ class DataLoader {
 		const slash = path.lastIndexOf('/')
 		const parent = slash > 0 ? path.slice(0, slash) : '/'
 		const name = slash >= 0 ? path.slice(slash + 1) : path
+		const oldSize = Number(this.residentFileSizes.get(path) || 0)
+		const newSize = Number(blob?.byteLength || blob?.length || 0)
 		FS.mkdirTree(parent)
 		try { FS.unlink(path) } catch(_) {}
 
-		// In streaming mode each blob is an independent allocation for one file,
-		// so canOwn=true no longer pins the complete 221 MiB HTTP response behind
-		// thousands of tiny Uint8Array views.
 		if(typeof FS.createDataFile === 'function') {
 			FS.createDataFile(parent, name, blob, true, true, true)
 		} else {
 			FS.writeFile(path, blob)
 		}
+
+		this.residentFileSizes.set(path, newSize)
+		this.residentBytes += newSize - oldSize
+		Module.render360ResidentBytes = this.residentBytes
+		Module.render360ResidentFiles = this.residentFileSizes.size
+		if((this.residentFileSizes.size & 127) === 0) render360PersistCrashState()
 	}
 
 	writeDataBuffer(arrayBuffer, label) {
@@ -123,8 +243,6 @@ class DataLoader {
 				throw new Error(`${label}: record ${fileCount} exceeds buffer (${recordEnd}/${dv.byteLength})`)
 			}
 			const path = decoder.decode(new Uint8Array(dv.buffer, offset + 8, pathLen))
-			// Copy one record in fallback mode so MEMFS does not retain the complete
-			// fallback ArrayBuffer just because one file view is still alive.
 			const blob = new Uint8Array(dataLen)
 			blob.set(new Uint8Array(dv.buffer, offset + 8 + pathLen, dataLen))
 			offset = recordEnd
@@ -135,9 +253,6 @@ class DataLoader {
 	}
 
 	async streamDataResponse(response, label, onProgress) {
-		// Safari 26 supports ReadableStream response bodies. Keep the old whole-
-		// buffer parser only as a compatibility fallback; the normal iPhone path
-		// consumes exactly one packed record at a time.
 		if(!response.body || typeof response.body.getReader !== 'function') {
 			Module.printErr?.(`[Render360] ${label}: streaming unavailable, using bounded fallback parser`)
 			return this.writeDataBuffer(await response.arrayBuffer(), label)
@@ -195,9 +310,6 @@ class DataLoader {
 				this.installOwnedFile(path, blob)
 				fileCount++
 
-				// Give WebKit regular collection points while unpacking thousands of
-				// records. This is especially important before Source starts compiling
-				// libclient/libserver/libengine Wasm SIDE_MODULEs.
 				if((fileCount & 31) === 0) await new Promise(resolve => setTimeout(resolve, 0))
 			}
 		} finally {
@@ -222,7 +334,8 @@ class DataLoader {
 				}
 				if(!response.ok) throw new Error(`HTTP ${response.status}`)
 				const result = await this.streamDataResponse(response, 'boot overlay')
-				Module.print?.(`[Render360] loaded boot overlay: ${result.fileCount} records, ${result.byteLength} bytes`)
+				const snapshot = globalThis.render360MemorySnapshot?.('boot-overlay-ready')
+				Module.print?.(`[Render360] loaded boot overlay: ${result.fileCount} records, ${result.byteLength} bytes; memory=${JSON.stringify(snapshot || {})}`)
 			} catch(error) {
 				Module.printErr?.(`[Render360] boot overlay load failed: ${error?.stack || error}`)
 			}
@@ -244,7 +357,8 @@ class DataLoader {
 				progress => this.setProgress(mapName, progress)
 			)
 			this.setProgress(mapName, 1)
-			Module.print?.(`[Render360] loaded ${mapName}.data: ${result.fileCount} records, ${result.byteLength} bytes`)
+			const snapshot = globalThis.render360MemorySnapshot?.(`map-ready:${mapName}`)
+			Module.print?.(`[Render360] loaded ${mapName}.data: ${result.fileCount} records, ${result.byteLength} bytes; memory=${JSON.stringify(snapshot || {})}`)
 		} catch(error) {
 			this.setProgress(mapName, 1)
 			Module.printErr?.(`[Render360] ${error?.stack || error}`)
