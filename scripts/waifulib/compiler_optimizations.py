@@ -72,7 +72,7 @@ CFLAGS = {
 	},
 	'debug': {
 		'msvc':    ['/Od', '/MTd'],
-		'owcc':    ['-g', '-O0', '-fno-omit-frame-pointer', '-funwind-tables', '-fno-omit-leaf-frame-pointer'],
+		'owcc':    ['-g', '-O0', '-fno-omit-frame-pointer', '-funwind-tables'],
 		'default': ['-g', '-O0'] #, '-ftree-vectorize', '-ffast-math']
 	},
 	'sanitize': {
@@ -167,7 +167,7 @@ def get_optimization_flags(conf):
 		# standard declaration into every Wasm translation unit. This is a
 		# compile-compatibility header only; alloca still lowers to the same
 		# stack allocation and does not add heap residency on iPhone.
-		if '-include' not in cflags:
+		if 'alloca.h' not in cflags:
 			cflags.extend(['-include', 'alloca.h'])
 
 		Logs.pprint('CYAN', 'Render360 Portal: Emscripten release uses -Os + explicit alloca.h for iPhone memory budget')
