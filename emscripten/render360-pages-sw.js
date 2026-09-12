@@ -8,18 +8,11 @@
  * `chunks/<map>.data` path. Keep the original web port's packed data as the
  * authoritative first choice. A locally generated VPK chunk is the fallback.
  *
- * Phase 2 keeps the user-generated Source boot overlay in its own Cache
- * Storage bucket. v3 is the deterministic first-frame shader manifest and
- * replaces v2, which staged the complete retail .vcs shader cache (~51 MiB on
- * the test install). The launcher should therefore never see a stale v2 boot
- * overlay after the Phase 2 service worker activates.
- *
- * Mutable engine assets (.js/.wasm/.so/.html and the generated launcher .data
- * package containing runtime SIDE_MODULEs) are normally fetched network-first
- * with cache:no-store. hl2_launcher.data is a special case: on iOS Safari the
- * preload fetch intermittently fails when a large same-origin data package is
- * re-wrapped in another streaming Response. It is already same-origin, so it
- * can be returned directly without CORP/COEP decoration.
+ * Phase 2 keeps the first-frame boot overlay under a strict memory budget and
+ * stores later shader families as map-scoped delta packs. When Source requests
+ * chunks/<map>.data this worker appends that map's shader records as a
+ * backpressure-aware stream. The browser never needs to materialize the whole
+ * map chunk merely to attach a small shader pack.
  *
  * No retail game data is committed to GitHub Pages.
  */
@@ -31,6 +24,7 @@ const OLD_BOOT_OVERLAY_CACHES = [
   'render360-portal-boot-overlay-v2',
   'render360-portal-boot-overlay-v1'
 ];
+const MAP_SHADER_CACHE = 'render360-portal-map-shaders-v1';
 const BOOT_OVERLAY_PATH = './render360-bootstrap-overlay.data';
 const UPSTREAM_CHUNK_BASE = 'https://yikes.pw/portal/chunks/';
 const UPSTREAM_TIMEOUT_MS = 8000;
@@ -69,6 +63,7 @@ self.addEventListener('message', event => {
   if (event.data.type === 'RENDER360_CLEAR_BOOT_OVERLAY') {
     event.waitUntil(Promise.all([
       caches.delete(BOOT_OVERLAY_CACHE),
+      caches.delete(MAP_SHADER_CACHE),
       ...OLD_BOOT_OVERLAY_CACHES.map(name => caches.delete(name))
     ]));
   }
@@ -108,6 +103,73 @@ async function fetchUpstreamChunk(upstreamUrl) {
   }
 }
 
+function concatenateResponseBodies(responses) {
+  const bodies = responses.map(response => response?.body).filter(Boolean);
+  let bodyIndex = 0;
+  let reader = null;
+
+  return new ReadableStream({
+    async pull(controller) {
+      while (bodyIndex < bodies.length) {
+        if (!reader) reader = bodies[bodyIndex].getReader();
+        const next = await reader.read();
+        if (next.done) {
+          try { reader.releaseLock(); } catch (_) {}
+          reader = null;
+          bodyIndex++;
+          continue;
+        }
+        controller.enqueue(next.value);
+        return;
+      }
+      controller.close();
+    },
+    async cancel(reason) {
+      if (reader) {
+        try { await reader.cancel(reason); } catch (_) {}
+      }
+      for (let i = bodyIndex + (reader ? 1 : 0); i < bodies.length; i++) {
+        try { await bodies[i].cancel(reason); } catch (_) {}
+      }
+    }
+  });
+}
+
+async function appendMapShaderPack(baseResponse, chunkName, source) {
+  if (!baseResponse || !baseResponse.ok) return baseResponse;
+  const cache = await caches.open(MAP_SHADER_CACHE);
+  const packUrl = new URL(`./shader-packs/${chunkName}`, self.location.href).href;
+  const pack = await cache.match(packUrl, { ignoreSearch: true });
+
+  const headers = isolationHeaders(baseResponse.headers, {
+    'Cache-Control': 'no-store, max-age=0',
+    'X-Render360-Chunk-Source': source
+  });
+  headers.delete('Content-Length');
+  headers.delete('Content-Encoding');
+  headers.delete('ETag');
+
+  if (!pack || !pack.ok || !pack.body) {
+    return new Response(baseResponse.body, {
+      status: baseResponse.status,
+      statusText: baseResponse.statusText,
+      headers
+    });
+  }
+
+  headers.set('X-Render360-Map-Shader-Pack', 'map-v1');
+  headers.set('X-Render360-Shader-Records', pack.headers.get('X-Render360-Shader-Records') || '0');
+  headers.set('X-Render360-Shader-Bytes', pack.headers.get('X-Render360-Shader-Bytes') || '0');
+  const families = pack.headers.get('X-Render360-Shader-Families');
+  if (families) headers.set('X-Render360-Shader-Families', families);
+
+  return new Response(concatenateResponseBodies([baseResponse, pack]), {
+    status: baseResponse.status,
+    statusText: baseResponse.statusText,
+    headers
+  });
+}
+
 async function servePortalChunk(request, url) {
   const name = url.pathname.split('/').pop();
   const cache = await caches.open(LOCAL_CHUNK_CACHE);
@@ -118,10 +180,7 @@ async function servePortalChunk(request, url) {
       const upstream = await fetchUpstreamChunk(upstreamUrl);
       if (!upstream.ok) throw new Error(`HTTP ${upstream.status}`);
       upstreamUnavailableUntil = 0;
-      return withIsolationHeaders(upstream, {
-        'Cache-Control': 'no-store, max-age=0',
-        'X-Render360-Chunk-Source': 'upstream-yikes'
-      });
+      return appendMapShaderPack(upstream, name, 'upstream-yikes');
     } catch (error) {
       upstreamUnavailableUntil = Date.now() + UPSTREAM_RETRY_COOLDOWN_MS;
       console.warn('[Render360 Pages SW] original Portal chunk unavailable; trying local VPK fallback', upstreamUrl, error);
@@ -130,10 +189,7 @@ async function servePortalChunk(request, url) {
 
   const local = await cache.match(request, { ignoreSearch: true });
   if (local && local.ok) {
-    return withIsolationHeaders(local, {
-      'Cache-Control': 'no-store, max-age=0',
-      'X-Render360-Chunk-Source': 'local-vpk'
-    });
+    return appendMapShaderPack(local, name, 'local-vpk');
   }
 
   return withIsolationHeaders(new Response(
