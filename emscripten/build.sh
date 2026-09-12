@@ -163,7 +163,8 @@ EMCC_FORCE_STDLIBS=libc,libc++,libc++abi emcc -Os \
 	-sASSERTIONS=1 -sSTACK_OVERFLOW_CHECK=1 \
 	-sPROXY_TO_PTHREAD -sOFFSCREENCANVASES_TO_PTHREAD="#canvas" -sOFFSCREENCANVAS_SUPPORT=1 \
 	-lworkerfs.js \
-	--pre-js emscripten/pre.js --post-js emscripten/post.js \
+	--pre-js emscripten/pre.js \
+	--post-js emscripten/phase3-workerfs.js --post-js emscripten/post.js \
 	$preload_libs \
 	build/launcher_main/libhl2_launcher.a \
 	-o build/launcher_main/hl2_launcher.html
