@@ -1,0 +1,108 @@
+name: Render360 Portal Phase 4 Growable Memory
+
+on:
+  workflow_dispatch:
+    inputs:
+      initial_memory_mb:
+        description: Initial shared Wasm memory in MiB
+        required: true
+        default: '320'
+        type: choice
+        options:
+          - '320'
+          - '256'
+      maximum_memory_mb:
+        description: Maximum shared Wasm memory in MiB
+        required: true
+        default: '1024'
+        type: choice
+        options:
+          - '1024'
+          - '768'
+  push:
+    branches:
+      - render360/phase4-growable-arraybuffers
+
+permissions:
+  contents: read
+
+concurrency:
+  group: portal-phase4-growable-${{ github.ref }}-${{ inputs.initial_memory_mb || '320' }}
+  cancel-in-progress: true
+
+jobs:
+  phase4-build:
+    name: Phase 4 · Emscripten 6.0.6 · growable memory
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      RENDER360_EMSCRIPTEN_VERSION: '6.0.6'
+      RENDER360_INITIAL_MEMORY_MB: ${{ inputs.initial_memory_mb || '320' }}
+      RENDER360_MAXIMUM_MEMORY_MB: ${{ inputs.maximum_memory_mb || '1024' }}
+      RENDER360_MEMORY_GROWTH_LINEAR_STEP_MB: '32'
+      RENDER360_GROWABLE_ARRAYBUFFERS: '1'
+
+    steps:
+      - name: Checkout Phase 4 branch
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Validate Phase 4 profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q '6.0.6' emscripten/get_emscripten.sh
+          grep -q -- '-sGROWABLE_ARRAYBUFFERS=${RENDER360_GROWABLE_ARRAYBUFFERS}' emscripten/build.sh
+          grep -q -- '-sALLOW_MEMORY_GROWTH=1' emscripten/build.sh
+          grep -q -- '-sUSE_PTHREADS' emscripten/build.sh
+          grep -q -- '-sPROXY_TO_PTHREAD' emscripten/build.sh
+          grep -q -- '-sMAIN_MODULE' emscripten/build.sh
+          grep -q -- '-lworkerfs.js' emscripten/build.sh
+          grep -q 'phase3-workerfs.js' emscripten/build.sh
+          grep -q 'phase4-memory-profile.js' emscripten/build.sh
+          grep -q 'toResizableBuffer' emscripten/phase4-memory-profile.js
+          node --check emscripten/phase4-memory-profile.js
+          echo "Phase 4 profile: initial=${RENDER360_INITIAL_MEMORY_MB} MiB max=${RENDER360_MAXIMUM_MEMORY_MB} MiB growable=${RENDER360_GROWABLE_ARRAYBUFFERS}"
+
+      - name: Install Emscripten 6.0.6
+        shell: bash
+        run: |
+          set -euo pipefail
+          source emscripten/get_emscripten.sh
+          emcc -v
+          echo "EMSDK=$EMSDK" >> "$GITHUB_ENV"
+
+      - name: Build Phase 4 threaded runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          source emsdk/emsdk_env.sh
+          bash emscripten/build.sh release
+
+      - name: Validate growable-memory artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s build/install/hl2_launcher.html
+          test -s build/install/hl2_launcher.js
+          test -s build/install/hl2_launcher.wasm
+          test -s build/install/hl2_launcher.data
+          test -s build/install/render360-phase4-profile.json
+          grep -q '"profile": "phase4-growable-arraybuffers"' build/install/render360-phase4-profile.json
+          grep -q '"growableArrayBuffers": 1' build/install/render360-phase4-profile.json
+          grep -q "\"initialMemoryMiB\": ${RENDER360_INITIAL_MEMORY_MB}" build/install/render360-phase4-profile.json
+          grep -q "\"maximumMemoryMiB\": ${RENDER360_MAXIMUM_MEMORY_MB}" build/install/render360-phase4-profile.json
+          grep -a -q 'render360Phase4MemoryProfile' build/install/hl2_launcher.js
+          grep -a -q 'render360-direct-vpk' build/install/hl2_launcher.js
+          ls -lh build/install/hl2_launcher.{html,js,wasm,data}
+          cat build/install/render360-phase4-profile.json
+
+      - name: Upload Phase 4 runtime
+        uses: actions/upload-artifact@v4
+        with:
+          name: render360-phase4-${{ env.RENDER360_INITIAL_MEMORY_MB }}m-${{ env.RENDER360_MAXIMUM_MEMORY_MB }}m
+          path: build/install/
+          if-no-files-found: error
+          retention-days: 14
