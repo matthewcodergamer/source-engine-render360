@@ -276,7 +276,7 @@
       if(timeout) clearTimeout(timeout)
       Module.render360DirectVPKReady = true
       safePhase(`phase3-workers-ready:${mountedWorkers.size}`)
-      safePrint(`[Render360 Phase 3] ${mountedWorkers.size} pthread workers have zero-copy retail VPK access; packed map preloads and Render360 map prefetch are disabled.`)
+      safePrint(`[Render360 Phase 3] ${mountedWorkers.size} pthread workers have zero-copy retail VPK access; background1 chunk preload is disabled, all packed map preloads are disabled, and Render360 map prefetch is disabled.`)
       if(dependencyHeld) {
         dependencyHeld = false
         removeRunDependency('render360-direct-vpk')
