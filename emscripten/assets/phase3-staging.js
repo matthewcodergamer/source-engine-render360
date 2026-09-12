@@ -57,6 +57,7 @@
     const stats = summarize(retailDescriptors);
     const ready = stats.gameinfo && stats.dirs > 0 && stats.vpks > 0;
     phase3Button.disabled = !ready;
+    globalThis.render360Phase3DirectSelected = ready;
     if(ready) {
       phase3Button.textContent = 'Launch Phase 3 · Direct VPK';
       setPhase3Status(`Phase 3 ready: ${stats.vpks} VPK files stay as browser File objects; background1 will not be unpacked into MEMFS.`);
@@ -74,6 +75,7 @@
     retailDescriptors = next;
     globalThis.render360Phase3RetailFiles = retailDescriptors;
     const stats = summarize(retailDescriptors);
+    globalThis.render360Phase3DirectSelected = !!(stats.gameinfo && stats.dirs > 0 && stats.vpks > 0);
     try {
       sessionStorage.setItem('render360-phase3-retail-summary-v1', JSON.stringify({
         at: Date.now(), files: stats.files, vpks: stats.vpks, dirs: stats.dirs,
