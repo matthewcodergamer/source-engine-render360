@@ -6,15 +6,13 @@
  *
  * Portal's Source runtime still requests the original same-origin
  * `chunks/<map>.data` path. Keep the original web port's packed data as the
- * authoritative first choice because those chunks were generated from the
- * Source engine's real OpenForRead trace/order. A locally generated VPK chunk
- * is only the fallback when the original host cannot be reached.
+ * authoritative first choice. A locally generated VPK chunk is the fallback.
  *
- * The user-generated Source boot overlay is deliberately served as its own
- * response and lives in its own Cache Storage bucket. v2 also contains the
- * retail Source .vcs shader cache needed by libstdshader_dx9 before the first
- * rendered frame. Keeping it separate avoids rebuilding hundreds of MiB of map
- * chunks just to refresh bootstrap material/shader resources.
+ * Phase 2 keeps the user-generated Source boot overlay in its own Cache
+ * Storage bucket. v3 is the deterministic first-frame shader manifest and
+ * replaces v2, which staged the complete retail .vcs shader cache (~51 MiB on
+ * the test install). The launcher should therefore never see a stale v2 boot
+ * overlay after the Phase 2 service worker activates.
  *
  * Mutable engine assets (.js/.wasm/.so/.html and the generated launcher .data
  * package containing runtime SIDE_MODULEs) are normally fetched network-first
@@ -28,17 +26,17 @@
 
 const LOCAL_CHUNK_CACHE = 'render360-portal-local-chunks-v2';
 const OLD_LOCAL_CHUNK_CACHE = 'render360-portal-local-chunks-v1';
-const BOOT_OVERLAY_CACHE = 'render360-portal-boot-overlay-v2';
-const OLD_BOOT_OVERLAY_CACHE = 'render360-portal-boot-overlay-v1';
+const BOOT_OVERLAY_CACHE = 'render360-portal-boot-overlay-v3';
+const OLD_BOOT_OVERLAY_CACHES = [
+  'render360-portal-boot-overlay-v2',
+  'render360-portal-boot-overlay-v1'
+];
 const BOOT_OVERLAY_PATH = './render360-bootstrap-overlay.data';
 const UPSTREAM_CHUNK_BASE = 'https://yikes.pw/portal/chunks/';
 const UPSTREAM_TIMEOUT_MS = 8000;
 const UPSTREAM_RETRY_COOLDOWN_MS = 60000;
 const MUTABLE_RUNTIME_RE = /\.(?:html?|js|mjs|wasm|so|json|data)$/i;
 
-// Never delete the current local map cache merely because a new service worker
-// activates. The iPhone staging page can spend minutes building chunks from
-// user-selected VPKs; schema changes should bump LOCAL_CHUNK_CACHE instead.
 const REBUILD_LOCAL_CHUNKS_ON_ACTIVATE = false;
 let upstreamUnavailableUntil = 0;
 
@@ -50,10 +48,7 @@ self.addEventListener('activate', event => {
   event.waitUntil((async () => {
     await Promise.all([
       caches.delete(OLD_LOCAL_CHUNK_CACHE),
-      // Invalidate the old 18-record texture-only overlay. A stale v1 overlay
-      // would otherwise let the page say "boot ready" while Source still lacks
-      // shaders/fxc/*.vcs and aborts at vertexlit_and_unlit_generic_*.
-      caches.delete(OLD_BOOT_OVERLAY_CACHE)
+      ...OLD_BOOT_OVERLAY_CACHES.map(name => caches.delete(name))
     ]);
     if (REBUILD_LOCAL_CHUNKS_ON_ACTIVATE) {
       await caches.delete(LOCAL_CHUNK_CACHE);
@@ -74,7 +69,7 @@ self.addEventListener('message', event => {
   if (event.data.type === 'RENDER360_CLEAR_BOOT_OVERLAY') {
     event.waitUntil(Promise.all([
       caches.delete(BOOT_OVERLAY_CACHE),
-      caches.delete(OLD_BOOT_OVERLAY_CACHE)
+      ...OLD_BOOT_OVERLAY_CACHES.map(name => caches.delete(name))
     ]));
   }
 });
@@ -118,11 +113,6 @@ async function servePortalChunk(request, url) {
   const cache = await caches.open(LOCAL_CHUNK_CACHE);
   const upstreamUrl = UPSTREAM_CHUNK_BASE + encodeURIComponent(name);
 
-  // The original hosted chunks are the canonical Portal web-port chunks. Use
-  // them first whenever the host is healthy. This restores the exact map delta
-  // plan that weliveinhell/source-engine's DataLoader was written for instead
-  // of silently preferring our heuristic VPK reconstruction just because a
-  // local cache entry exists.
   if (Date.now() >= upstreamUnavailableUntil) {
     try {
       const upstream = await fetchUpstreamChunk(upstreamUrl);
@@ -138,9 +128,6 @@ async function servePortalChunk(request, url) {
     }
   }
 
-  // Only fall back to browser-generated chunks after the original host failed.
-  // Cache Storage can stream the stored Response back without rebuilding all
-  // VPKs or retaining the user's selected File objects in the launcher page.
   const local = await cache.match(request, { ignoreSearch: true });
   if (local && local.ok) {
     return withIsolationHeaders(local, {
@@ -162,7 +149,7 @@ async function serveBootOverlay() {
   const overlayUrl = new URL(BOOT_OVERLAY_PATH, self.location.href).href;
   const overlay = await cache.match(overlayUrl, { ignoreSearch: true });
   if (!overlay || !overlay.ok) {
-    return withIsolationHeaders(new Response('Render360 local boot/shader overlay not prepared', {
+    return withIsolationHeaders(new Response('Render360 Phase 2 first-frame boot/shader overlay not prepared', {
       status: 404,
       headers: { 'Content-Type': 'text/plain; charset=utf-8' }
     }), {
@@ -174,7 +161,7 @@ async function serveBootOverlay() {
   return withIsolationHeaders(overlay, {
     'Content-Type': 'application/octet-stream',
     'Cache-Control': 'no-store, max-age=0',
-    'X-Render360-Chunk-Source': 'local-boot-overlay-v2'
+    'X-Render360-Chunk-Source': 'local-boot-overlay-manifest'
   });
 }
 
@@ -188,10 +175,6 @@ async function fetchRuntimeFresh(request) {
 }
 
 async function fetchLauncherDataDirect(request) {
-  // Emscripten's preload package is same-origin and therefore does not need a
-  // Cross-Origin-Resource-Policy header to satisfy COEP. Returning the original
-  // response also avoids a WebKit failure observed when the large .data body is
-  // piped through new Response(response.body, ...).
   return fetch(new Request(request, {
     cache: 'no-store',
     credentials: 'same-origin'
