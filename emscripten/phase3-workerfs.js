@@ -79,10 +79,6 @@
   function shouldExposeRetailPath(path) {
     const clean = normalizeRetailPath(path)
     if(!ROOT_RE.test(clean)) return false
-    // VPKs carry almost all retail game content and are the main Phase 3 win.
-    // Keep only small loose configuration/search-path files in the shadow tree;
-    // huge loose media/material files should be read from VPK instead of gaining
-    // thousands of unnecessary MEMFS metadata nodes.
     if(/\.vpk$/i.test(clean)) return true
     if(/\/(?:gameinfo\.txt|steam\.inf|game\.inf)$/i.test(clean)) return true
     if(/\/(?:cfg|resource|scripts)\//i.test(clean)) return true
@@ -129,9 +125,6 @@
       FS.mkdirTree(dirname(livePath))
       unlinkIfSymlink(livePath)
       try {
-        // Preserve any runtime-created writable MEMFS file instead of replacing
-        // it. Retail files are read-only by design; newly-created config/save
-        // files can still live beside these symlinks in the MEMFS directory.
         FS.lookupPath(livePath, { follow: false })
         continue
       } catch(_) {}
@@ -145,8 +138,6 @@
     Module.render360DirectVPKRequested = true
     Module.render360DirectVPKMounted = true
     Module.render360DirectVPKStats = stats
-    // Retail bytes live in browser File/Blob backing storage, not MEMFS. Do not
-    // count them as resident MEMFS just because Source can now address them.
     Module.render360ResidentBytes = Number(Module.render360ResidentBytes || 0)
     Module.render360ResidentFiles = Number(Module.render360ResidentFiles || 0)
     safePhase(`phase3-workerfs-ready:vpk=${stats.vpkFiles}:links=${links}`)
@@ -154,9 +145,6 @@
     return stats
   }
 
-  // Every pthread announces itself. The browser-main runtime responds only to
-  // the requesting worker, so each File list is structured-cloned once per pool
-  // worker instead of rebroadcasting multi-gigabyte metadata to everybody.
   if(isPthread && channel) {
     channel.addEventListener('message', event => {
       const data = event?.data
@@ -177,12 +165,13 @@
 
   if(isWindow && embeddedLauncher) {
     Module.render360DirectVPKRequested = true
-    safePhase('phase3-await-retail-files')
+    safePhase('phase3-await-prerun')
 
-    let token = `launch-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+    const token = `launch-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
     let descriptors = null
     let dependencyHeld = false
     let released = false
+    let handoffStarted = false
     let timeout = 0
     const mountedWorkers = new Set()
     const failedWorkers = new Map()
@@ -206,8 +195,6 @@
       const text = `[Render360 Phase 3] ${message}`
       safePhase(`phase3-handoff-failed:${String(message).slice(0, 120)}`)
       safePrintErr(text)
-      // Do not silently fall back to the 221 MiB MEMFS path in an iPhone Phase 3
-      // launch. A direct launcher URL still retains the old compatibility path.
       if(typeof abort === 'function') abort(text)
       else throw new Error(text)
     }
@@ -223,7 +210,7 @@
         if(!data) return
         if(data.type === READY_TYPE && data.workerId) {
           readyWorkers.add(data.workerId)
-          sendToWorker(data.workerId)
+          if(handoffStarted) sendToWorker(data.workerId)
           return
         }
         if(data.token !== token) return
@@ -257,20 +244,29 @@
       for(const id of readyWorkers) sendToWorker(id)
     })
 
-    addRunDependency('render360-direct-vpk')
-    dependencyHeld = true
-    timeout = setTimeout(() => {
-      failHandoff(`timed out waiting for ${EXPECTED_POOL_WORKERS} WORKERFS workers (ready=${readyWorkers.size}, mounted=${mountedWorkers.size})`)
-    }, HANDOFF_TIMEOUT_MS)
-
-    // Parent owns the actual File objects and answers this request without
-    // navigating away, so Safari never loses them during normal startup.
-    window.parent.postMessage({ type: REQUEST_TYPE, token }, location.origin)
+    // Do not add this dependency during script evaluation. Emscripten creates
+    // and loads the PTHREAD_POOL_SIZE workers from preRun; holding a dependency
+    // before preRun can prevent that pool from ever loading. Enter preRun first,
+    // then hold main() while the already-starting workers mount WORKERFS.
+    Module.preRun = Module.preRun || []
+    Module.preRun.push(() => {
+      if(handoffStarted) return
+      handoffStarted = true
+      if(!channel) {
+        failHandoff('BroadcastChannel is unavailable for pthread File handoff')
+        return
+      }
+      addRunDependency('render360-direct-vpk')
+      dependencyHeld = true
+      timeout = setTimeout(() => {
+        failHandoff(`timed out waiting for ${EXPECTED_POOL_WORKERS} WORKERFS workers (ready=${readyWorkers.size}, mounted=${mountedWorkers.size})`)
+      }, HANDOFF_TIMEOUT_MS)
+      safePhase('phase3-await-retail-files')
+      window.parent.postMessage({ type: REQUEST_TYPE, token }, location.origin)
+      for(const id of readyWorkers) sendToWorker(id)
+    })
   }
 
-  // Replace the map-chunk dependency path only after the retail mount exists in
-  // the current Source worker. In compatibility/direct-URL launches this method
-  // remains unchanged and Phase 2 chunks continue to work.
   if(typeof DataLoader !== 'undefined') {
     const originalLoadMapWithDeps = DataLoader.prototype.loadMapWithDeps
     DataLoader.prototype.loadMapWithDeps = async function(mapName) {
