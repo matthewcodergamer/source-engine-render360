@@ -1,8 +1,8 @@
 // Safari/iOS may terminate the WebContent process without giving Wasm a normal
 // exception when the Source startup peak crosses the device memory budget. The
 // browser then reloads the exact launcher URL, which can immediately repeat the
-// expensive startup and make the situation worse. Persist the last launch phase
-// so a process-kill reload is stopped before main() runs again.
+// expensive startup and make the situation worse. Persist only the latest launch
+// checkpoint so a process-kill reload reports where execution actually stopped.
 const RENDER360_IOS_CRASH_STATE_KEY = 'render360-ios-crash-state-v2'
 const RENDER360_IOS_CRASH_CHANNEL = 'render360-ios-crash-state-channel-v1'
 const render360IsWindow = typeof window !== 'undefined' && typeof document !== 'undefined'
@@ -25,17 +25,25 @@ const render360ProbableProcessReload = !!(
 	render360Now - Number(render360PreviousState.updatedAt || 0) < 3 * 60 * 1000
 )
 
+// Deliberately flat: no nested previous-state history. Every checkpoint replaces
+// the one before it. If Safari kills WebContent, phase is left at the last phase
+// that actually ran, while interruption explains why this reload was blocked.
 const render360CrashState = {
 	launchId: render360LaunchId,
 	active: !render360ProbableProcessReload,
 	blocked: render360ProbableProcessReload,
-	phase: render360ProbableProcessReload ? 'probable-process-kill-reload' : 'runtime-script-start',
-	startedAt: render360Now,
+	phase: render360ProbableProcessReload ? String(render360PreviousState?.phase || 'unknown') : 'runtime-script-start',
+	interruption: render360ProbableProcessReload ? 'probable-process-kill-reload' : null,
+	startedAt: render360ProbableProcessReload ? Number(render360PreviousState?.startedAt || render360Now) : render360Now,
 	updatedAt: render360Now,
-	wasmHeapBytes: 0,
-	memfsBytes: 0,
-	memfsFiles: 0,
-	previous: render360ProbableProcessReload ? render360PreviousState : null
+	wasmHeapBytes: render360ProbableProcessReload ? Number(render360PreviousState?.wasmHeapBytes || 0) : 0,
+	memfsBytes: render360ProbableProcessReload ? Number(render360PreviousState?.memfsBytes || 0) : 0,
+	memfsFiles: render360ProbableProcessReload ? Number(render360PreviousState?.memfsFiles || 0) : 0
+}
+
+// A deliberate fresh launch should not carry an error from an older attempt.
+if(render360IsWindow && !render360ProbableProcessReload) {
+	try { localStorage.removeItem('render360-ios-last-error-v1') } catch(_) {}
 }
 
 let render360CrashChannel = null
@@ -72,6 +80,7 @@ function render360PersistCrashState() {
 
 function render360SetPhase(phase) {
 	render360CrashState.phase = String(phase || 'unknown')
+	render360CrashState.interruption = null
 	render360PersistCrashState()
 }
 
@@ -88,7 +97,7 @@ globalThis.render360MemorySnapshot = (phase) => {
 }
 
 // Worker-side phase changes matter most for PROXY_TO_PTHREAD. Relay them to
-// the Window so localStorage still contains the last worker phase if WebKit
+// the Window so localStorage still contains the latest worker phase if WebKit
 // kills the process and reloads the launcher.
 if(render360IsWindow && render360CrashChannel) {
 	render360CrashChannel.addEventListener('message', event => {
@@ -98,6 +107,7 @@ if(render360IsWindow && render360CrashChannel) {
 		render360CrashState.active = incoming.active !== false
 		render360CrashState.blocked = false
 		render360CrashState.phase = String(incoming.phase || render360CrashState.phase)
+		render360CrashState.interruption = incoming.interruption || null
 		render360CrashState.updatedAt = Number(incoming.updatedAt || Date.now())
 		render360CrashState.wasmHeapBytes = Number(incoming.wasmHeapBytes || render360CrashState.wasmHeapBytes || 0)
 		render360CrashState.memfsBytes = Number(incoming.memfsBytes || render360CrashState.memfsBytes || 0)
@@ -108,13 +118,12 @@ if(render360IsWindow && render360CrashChannel) {
 
 if(render360ProbableProcessReload) {
 	// noInitialRun prevents the expensive Source main()/map/module startup from
-	// being executed a second time. The launcher can still render diagnostics.
+	// being executed a second time. The retained phase is the last useful event.
 	Module['noInitialRun'] = true
-	const previous = render360PreviousState || {}
 	setTimeout(() => {
-		const heap = Math.round(Number(previous.wasmHeapBytes || 0) / 1048576)
-		const memfs = Math.round(Number(previous.memfsBytes || 0) / 1048576)
-		const message = `[Render360 iOS guard] Safari restarted this launcher after a probable WebContent/GPU process kill. Previous phase=${previous.phase || 'unknown'}, wasmHeap=${heap} MiB, trackedMEMFS=${memfs} MiB. Use Copy diagnostics, then return to the staging page for a deliberate fresh launch.`
+		const heap = Math.round(Number(render360CrashState.wasmHeapBytes || 0) / 1048576)
+		const memfs = Math.round(Number(render360CrashState.memfsBytes || 0) / 1048576)
+		const message = `[Render360 iOS guard] Safari restarted this launcher after a probable WebContent/GPU process kill. Last phase=${render360CrashState.phase || 'unknown'}, wasmHeap=${heap} MiB, trackedMEMFS=${memfs} MiB. Use Copy diagnostics, then return to the staging page for a deliberate fresh launch.`
 		Module.printErr?.(message)
 		if(typeof statusElement !== 'undefined' && statusElement) statusElement.textContent = message
 		if(typeof spinnerElement !== 'undefined' && spinnerElement) spinnerElement.style.display = 'none'
@@ -154,6 +163,7 @@ if(render360IsWindow) {
 		if(!render360CrashState.blocked) {
 			render360CrashState.active = false
 			render360CrashState.phase = 'clean-pagehide'
+			render360CrashState.interruption = null
 			render360PersistCrashState()
 		}
 		try { render360CrashChannel?.close() } catch(_) {}
