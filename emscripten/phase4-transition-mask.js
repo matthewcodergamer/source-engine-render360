@@ -255,11 +255,14 @@
         publish()
         return
       }
-      overlay.classList.add('r360-opening')
+      const node = overlay
+      node.classList.add('r360-opening')
       hideTimer = setTimeout(() => {
-        if(!overlay) return
-        overlay.classList.remove('r360-visible', 'r360-opening')
-        overlay.setAttribute('aria-hidden', 'true')
+        // Remove the full-screen compositor element entirely once its doors are
+        // offscreen. Keeping a hidden transformed layer around after every map
+        // change can waste GPU/compositor memory on mobile Safari.
+        if(node.isConnected) node.remove()
+        if(overlay === node) overlay = null
         state.visible = false
         publish()
       }, OPEN_ANIMATION_MS)
