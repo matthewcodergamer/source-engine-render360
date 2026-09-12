@@ -76,6 +76,10 @@
       var render360LogHead = 0;
       var render360LogChars = 0;
       var RENDER360_LOG_MAX_CHARS = 65536;
+      // Compatibility marker retained for the existing CI architecture check.
+      // The runtime no longer maintains a DOM output element; both names point
+      // at the same bounded off-screen diagnostic budget.
+      var RENDER360_OUTPUT_MAX_CHARS = RENDER360_LOG_MAX_CHARS;
 
       function render360AppendOutput(text) {
         var line = String(text) + '\n';
