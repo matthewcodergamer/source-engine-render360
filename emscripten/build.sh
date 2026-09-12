@@ -65,6 +65,8 @@ replacement = r'''\1#ifdef __EMSCRIPTEN__
 		const char *pError = dlerror();
 		Warning("Can't find module - %s%s%s\n", pModuleName,
 			pError ? " · " : "", pError ? pError : "");
+	} else {
+		Msg("Render360: loaded module: %s\n", szModuleName);
 	}
 #else
 '''
@@ -77,6 +79,7 @@ if count != 1:
     raise SystemExit('Render360 Portal: could not locate Emscripten Sys_LoadModule block')
 for marker in (
     'Render360: optional browser module skipped:',
+    'Render360: loaded module:',
     'libsourcevr.so',
     'libvideo_bink.so',
     'libvideo_webm.so',
@@ -91,6 +94,8 @@ if 'Msg("Render360: optional browser module skipped: %s\\n", szModuleName);' not
     raise SystemExit('Render360 Portal: generated optional-module log newline is malformed')
 if 'Msg("LoadLibrary: path: %s\\n", szModuleName);' not in updated:
     raise SystemExit('Render360 Portal: generated LoadLibrary log newline is malformed')
+if 'Msg("Render360: loaded module: %s\\n", szModuleName);' not in updated:
+    raise SystemExit('Render360 Portal: generated loaded-module log newline is malformed')
 path.write_text(updated)
 print('Render360 Portal: patched Sys_LoadModule optional browser-module handling')
 PY
@@ -142,20 +147,18 @@ for lib in build/install/*.so; do
 	preload_libs="$preload_libs --preload-file $lib@/$base"
 done
 
-# iOS Safari can jetsam a WebContent process once this threaded Source build
-# combines a large Wasm module, several workers, a 200+ MiB Portal data set and
-# WebGL allocations. Keep the real threaded architecture but make the release
-# linker optimize for size, cap the shared heap below the iPhone soft process
-# limit, and avoid debug name/stack instrumentation in the deployed build.
-# Emscripten 4.0.9 does not define -sGROWABLE_ARRAYBUFFERS=1. Keep that exact
-# literal only as a CI compatibility marker; supported memory growth here is
-# ALLOW_MEMORY_GROWTH with a bounded maximum and linear growth step.
+# iPhone Safari has a relatively tight WebContent process budget. At startup
+# Portal simultaneously holds the shared Wasm heap, streamed retail data in
+# MEMFS, Wasm SIDE_MODULE bytes/JIT code, pthread stacks and WebGL resources.
+# Favor the memory-efficient dlmalloc allocator and keep secondary pthread stacks
+# at 1 MiB; Source's proxied main thread retains the explicit 4 MiB main stack.
+# The shared heap remains growable rather than reserving a giant fixed heap.
 EMCC_FORCE_STDLIBS=libc,libc++,libc++abi emcc -Os \
-	-sUSE_BZIP2=1 -sUSE_SDL=2 -sUSE_FREETYPE=1 -sUSE_LIBJPEG=1 -sUSE_LIBPNG -sMALLOC=mimalloc \
+	-sUSE_BZIP2=1 -sUSE_SDL=2 -sUSE_FREETYPE=1 -sUSE_LIBJPEG=1 -sUSE_LIBPNG -sMALLOC=dlmalloc \
 	-sMAIN_MODULE -sINCLUDE_FULL_LIBRARY=1 \
 	-sINITIAL_MEMORY=384mb -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=1024mb -sMEMORY_GROWTH_LINEAR_STEP=32mb \
 	-sSHARED_MEMORY=1 -sUSE_PTHREADS -sPTHREAD_POOL_SIZE=2 -sPTHREAD_POOL_SIZE_STRICT=0 \
-	-sFULL_ES3 -sSTACK_SIZE=4mb --shell-file=emscripten/shell.html \
+	-sFULL_ES3 -sSTACK_SIZE=4mb -sDEFAULT_PTHREAD_STACK_SIZE=1mb --shell-file=emscripten/shell.html \
 	-sASSERTIONS=1 -sSTACK_OVERFLOW_CHECK=1 \
 	-sPROXY_TO_PTHREAD -sOFFSCREENCANVASES_TO_PTHREAD="#canvas" -sOFFSCREENCANVAS_SUPPORT=1 \
 	--pre-js emscripten/pre.js --post-js emscripten/post.js \
