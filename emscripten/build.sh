@@ -148,11 +148,12 @@ for lib in build/install/*.so; do
 done
 
 # iPhone Safari has a relatively tight WebContent process budget. At startup
-# Portal simultaneously holds the shared Wasm heap, streamed retail data in
-# MEMFS, Wasm SIDE_MODULE bytes/JIT code, pthread stacks and WebGL resources.
-# Favor the memory-efficient dlmalloc allocator and keep secondary pthread stacks
-# at 1 MiB; Source's proxied main thread retains the explicit 4 MiB main stack.
-# The shared heap remains growable rather than reserving a giant fixed heap.
+# Portal simultaneously holds the shared Wasm heap, Wasm SIDE_MODULE bytes/JIT
+# code, pthread stacks and WebGL resources. Phase 3 removes the retail map/VPK
+# payload from MEMFS: the staging page keeps the user's File objects alive and
+# forwards them to the Source pthread where WORKERFS exposes them read-only.
+# Source then opens the retail VPKs and performs its own range reads on demand.
+# WORKERFS is not part of the default JS filesystem, so link it explicitly.
 EMCC_FORCE_STDLIBS=libc,libc++,libc++abi emcc -Os \
 	-sUSE_BZIP2=1 -sUSE_SDL=2 -sUSE_FREETYPE=1 -sUSE_LIBJPEG=1 -sUSE_LIBPNG -sMALLOC=dlmalloc \
 	-sMAIN_MODULE -sINCLUDE_FULL_LIBRARY=1 \
@@ -161,6 +162,7 @@ EMCC_FORCE_STDLIBS=libc,libc++,libc++abi emcc -Os \
 	-sFULL_ES3 -sSTACK_SIZE=4mb -sDEFAULT_PTHREAD_STACK_SIZE=1mb --shell-file=emscripten/shell.html \
 	-sASSERTIONS=1 -sSTACK_OVERFLOW_CHECK=1 \
 	-sPROXY_TO_PTHREAD -sOFFSCREENCANVASES_TO_PTHREAD="#canvas" -sOFFSCREENCANVAS_SUPPORT=1 \
+	-lworkerfs.js \
 	--pre-js emscripten/pre.js --post-js emscripten/post.js \
 	$preload_libs \
 	build/launcher_main/libhl2_launcher.a \
