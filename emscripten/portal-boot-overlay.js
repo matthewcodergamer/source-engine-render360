@@ -1,20 +1,42 @@
 (() => {
   'use strict';
 
-  // This overlay is intentionally separate from the map-chunk cache. It is
-  // prepared from the tester's own Portal installation and loaded before the
-  // Source material system starts, so engine bootstrap files that are not
-  // referenced by a BSP are already present in MEMFS.
+  // Phase 2 memory model:
+  // 1. Build a deterministic first-frame overlay under a hard 20 MiB budget.
+  // 2. Never copy the complete retail .vcs cache into bootstrap MEMFS.
+  // 3. Inspect each Portal BSP's referenced VMTs and build a shader-only delta
+  //    pack for that map. The service worker appends that tiny pack to the map
+  //    chunk only when Source actually requests the map.
   //
-  // Phase 2: do NOT stage every retail .vcs file. The previous overlay solved
-  // missing libstdshader_dx9 resources by copying the complete shader cache,
-  // but that pushed the bootstrap to roughly 51 MiB on the test install. Keep
-  // only deterministic shader families needed by the menu/background startup.
-  // Any family discovered later can be added explicitly to this manifest.
+  // The selected Portal files stay local. Cache Storage holds the generated
+  // packed records; no retail data is uploaded to GitHub Pages.
   const CACHE_NAME = 'render360-portal-boot-overlay-v3';
+  const MAP_SHADER_CACHE_NAME = 'render360-portal-map-shaders-v1';
   const OVERLAY_PATH = './render360-bootstrap-overlay.data';
   const MANIFEST_VERSION = 'portal-first-frame-v1';
   const BOOTSTRAP_SHADER_BUDGET_BYTES = 20 * 1024 * 1024;
+  const MAX_SINGLE_SHADER_BYTES = 16 * 1024 * 1024;
+  const MAX_VMT_BYTES = 2 * 1024 * 1024;
+  const MAX_BSP_TEXT_SCAN_BYTES = 24 * 1024 * 1024;
+
+  const MAPS = [
+    'background1',
+    'testchmb_a_00',
+    'testchmb_a_01',
+    'testchmb_a_02',
+    'testchmb_a_03',
+    'testchmb_a_04',
+    'testchmb_a_05',
+    'testchmb_a_06',
+    'testchmb_a_07',
+    'testchmb_a_08',
+    'testchmb_a_09',
+    'testchmb_a_10',
+    'testchmb_a_11',
+    'testchmb_a_13',
+    'testchmb_a_14',
+    'testchmb_a_15'
+  ];
 
   const BOOT_ASSET_SUFFIXES = [
     'materials/debug/debugempty.vtf',
@@ -39,15 +61,9 @@
     'materials/console/startup_loading.vtf'
   ];
 
-  // Ordered first-frame manifest. "required" families are always retained if
-  // they exist in the selected retail install. Optional families are admitted
-  // only while the 20 MiB bootstrap budget still has room. This makes additions
-  // reviewable instead of silently regressing to "copy every .vcs file".
-  //
-  // Prefixes refer to the basename before .vcs. Source retail packages contain
-  // stage/combo suffixes such as _vs20, _ps20b, _vs30 and _ps30; matching a
-  // family includes all of those compiled variants but nothing from unrelated
-  // shader families.
+  // Ordered first-frame manifest. Required families are always retained if
+  // present. Optional families are admitted only while the packed overlay still
+  // fits the 20 MiB budget. Any new bootstrap dependency must be explicit here.
   const FIRST_FRAME_SHADER_MANIFEST = [
     { family: 'vertexlit_and_unlit_generic', prefixes: ['vertexlit_and_unlit_generic'], required: true },
     { family: 'lightmappedgeneric', prefixes: ['lightmappedgeneric'], required: true },
@@ -63,7 +79,7 @@
   ];
 
   const SHADER_RE = /(?:^|\/)shaders\/(?:fxc|vsh|psh)\/[^/]+\.vcs$/i;
-  const MAX_SINGLE_SHADER_BYTES = 16 * 1024 * 1024;
+  const MAP_RESOURCE_RE = /(?:^|\/)(?:maps\/[^/]+\.bsp|materials\/[^/]+(?:\/[^/]+)*\.vmt)$/i;
 
   function normalizePath(value) {
     return String(value || '')
@@ -90,6 +106,44 @@
     if (!file.webkitRelativePath) return raw;
     const parts = raw.split('/');
     return parts.length > 1 ? parts.slice(1).join('/') : raw;
+  }
+
+  function compactShaderName(value) {
+    return String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  }
+
+  function compiledShaderFamily(path) {
+    const stem = basename(path).replace(/\.vcs$/i, '');
+    // Retail cache names normally end in _vs20/_ps20b/_vs30/_ps30 plus
+    // optional combo suffixes. Remove the stage portion to obtain the family.
+    return stem.replace(/_(?:vs|ps|vsh|psh)[a-z0-9_]*$/i, '');
+  }
+
+  function materialShaderCandidateKeys(shaderName) {
+    const key = compactShaderName(shaderName).replace(/^sdk/, '');
+    const aliases = {
+      vertexlitgeneric: ['vertexlitandunlitgeneric', 'vertexlitgeneric'],
+      unlitgeneric: ['vertexlitandunlitgeneric', 'unlitgeneric'],
+      lightmappedgeneric: ['lightmappedgeneric'],
+      screenspacegeneral: ['screenspacegeneral'],
+      worldvertextransition: ['worldvertextransition'],
+      worldtwotextureblend: ['worldtwotextureblend'],
+      decalmodulate: ['decalmodulate'],
+      sprite: ['sprite', 'spritecard'],
+      spritecard: ['spritecard', 'sprite'],
+      sky: ['sky'],
+      water: ['water'],
+      refract: ['refract'],
+      cable: ['cable'],
+      teeth: ['teeth'],
+      eyes: ['eyes', 'eyerefract'],
+      eyerefract: ['eyerefract', 'eyes'],
+      modulate: ['modulate'],
+      unlittwotexture: ['unlittwotexture'],
+      depthwrite: ['depthwrite'],
+      shadow: ['shadow', 'shadowmodel']
+    };
+    return aliases[key] || (key ? [key] : []);
   }
 
   function readCString(bytes, state) {
@@ -181,6 +235,7 @@
     const allFiles = Array.from(files || []);
     const filesByRel = new Map();
     const found = new Map();
+    const gameEntries = new Map();
     const fixedFound = new Set();
     let discoveredShaderFiles = 0;
     let selectedShaderFiles = 0;
@@ -195,12 +250,15 @@
       filesByRel.set(rel, file);
 
       if (/^(?:portal|hl2|platform)\//.test(rel)) {
+        const looseDescriptor = {
+          kind: 'loose', path: '/' + rel, file, size: file.size
+        };
+        if (MAP_RESOURCE_RE.test(rel) || SHADER_RE.test(rel)) addDescriptor(gameEntries, looseDescriptor);
+
         const fixed = fixedSuffixFor(rel);
         if (fixed) {
           fixedFound.add(fixed);
-          addDescriptor(found, {
-            kind: 'loose', path: '/' + rel, file, size: file.size, category: 'boot'
-          });
+          addDescriptor(found, { ...looseDescriptor, category: 'boot' });
         }
 
         if (SHADER_RE.test(rel)) {
@@ -210,8 +268,7 @@
             omittedShaderFiles++;
           } else if (file.size <= MAX_SINGLE_SHADER_BYTES) {
             if (addDescriptor(found, {
-              kind: 'loose', path: '/' + rel, file, size: file.size,
-              category: 'shader', family: manifest.family
+              ...looseDescriptor, category: 'shader', family: manifest.family
             })) {
               looseShaders++;
               selectedShaderFiles++;
@@ -269,10 +326,18 @@
 
             const ext = extension === ' ' ? '' : normalizePath(extension);
             const internal = [directory, fileName + (ext ? '.' + ext : '')].filter(Boolean).join('/');
-            const fixed = fixedSuffixFor(internal);
+            const path = '/' + [parent, internal].filter(Boolean).join('/');
             const totalSize = preload.length + entryLength;
             const shaderCandidate = SHADER_RE.test(internal);
+            const fixed = fixedSuffixFor(internal);
             const manifest = shaderCandidate ? shaderManifestEntry(internal) : null;
+            const baseDescriptor = {
+              kind: 'vpk', path, dirFile: file, dirRel: rel, archiveBase,
+              archiveIndex, entryOffset, entryLength, preload, headerSize, treeSize,
+              size: totalSize
+            };
+
+            if (MAP_RESOURCE_RE.test(internal) || shaderCandidate) addDescriptor(gameEntries, baseDescriptor);
 
             if (shaderCandidate) discoveredShaderFiles++;
             if (shaderCandidate && !manifest) omittedShaderFiles++;
@@ -287,23 +352,11 @@
             }
 
             if (fixed) fixedFound.add(fixed);
-            const descriptor = {
-              kind: 'vpk',
-              path: '/' + [parent, internal].filter(Boolean).join('/'),
-              dirFile: file,
-              dirRel: rel,
-              archiveBase,
-              archiveIndex,
-              entryOffset,
-              entryLength,
-              preload,
-              headerSize,
-              treeSize,
-              size: totalSize,
+            if (addDescriptor(found, {
+              ...baseDescriptor,
               category: shader ? 'shader' : 'boot',
               family: shader ? manifest.family : null
-            };
-            if (addDescriptor(found, descriptor) && shader) {
+            }) && shader) {
               vpkShaders++;
               selectedShaderFiles++;
             }
@@ -322,8 +375,8 @@
     if (skippedHugeShaders) log(`Boot overlay skipped ${skippedHugeShaders} shader file(s) larger than ${MAX_SINGLE_SHADER_BYTES} bytes.`);
 
     return {
-      found, filesByRel, fixedFound, discoveredShaderFiles, selectedShaderFiles,
-      omittedShaderFiles, skippedHugeShaders
+      found, gameEntries, filesByRel, fixedFound, discoveredShaderFiles,
+      selectedShaderFiles, omittedShaderFiles, skippedHugeShaders
     };
   }
 
@@ -351,11 +404,271 @@
     return new Blob(pieces, { type: 'application/octet-stream' });
   }
 
+  function resolveGameEntry(entries, ref, preferredRoot = 'portal') {
+    const clean = normalizePath(ref).replace(/^\.\//, '').replace(/^\/+/, '');
+    if (!clean) return null;
+    if (clean.startsWith('portal/') || clean.startsWith('hl2/') || clean.startsWith('platform/')) {
+      const exact = '/' + clean;
+      return entries.has(exact) ? exact : null;
+    }
+    const roots = preferredRoot === 'hl2' ? ['hl2', 'portal', 'platform'] : ['portal', 'hl2', 'platform'];
+    for (const root of roots) {
+      const candidate = '/' + root + '/' + clean;
+      if (entries.has(candidate)) return candidate;
+    }
+    return null;
+  }
+
+  function findEntryBySuffix(entries, suffix) {
+    const needle = '/' + normalizePath(suffix);
+    for (const path of entries.keys()) if (path.endsWith(needle)) return path;
+    return null;
+  }
+
+  function resolveMaterialEntry(entries, material, preferredRoot = 'portal') {
+    let clean = normalizePath(material).replace(/^materials\//, '').replace(/^\/+/, '');
+    if (!clean) return null;
+    if (!clean.endsWith('.vmt')) clean += '.vmt';
+    return resolveGameEntry(entries, 'materials/' + clean, preferredRoot);
+  }
+
+  function parseBSPLumps(buffer) {
+    if (!(buffer instanceof ArrayBuffer) || buffer.byteLength < 1036) return null;
+    const dv = new DataView(buffer);
+    if (dv.getUint32(0, true) !== 0x50534256) return null;
+    const lumps = [];
+    for (let i = 0; i < 64; i++) {
+      const offset = 8 + i * 16;
+      const fileofs = dv.getInt32(offset, true);
+      const filelen = dv.getInt32(offset + 4, true);
+      if (fileofs < 0 || filelen < 0 || fileofs + filelen > buffer.byteLength) lumps.push({ fileofs: 0, filelen: 0 });
+      else lumps.push({ fileofs, filelen });
+    }
+    return { dv, lumps };
+  }
+
+  function extractCString(bytes, start, limit) {
+    let end = start;
+    const max = Math.min(bytes.length, limit == null ? bytes.length : limit);
+    while (end < max && bytes[end] !== 0) end++;
+    return new TextDecoder('utf-8').decode(bytes.subarray(start, end));
+  }
+
+  function discoverBSPMaterialRefs(buffer) {
+    const refs = new Set();
+    const parsed = parseBSPLumps(buffer);
+    if (!parsed) return refs;
+    const bytes = new Uint8Array(buffer);
+    const stringData = parsed.lumps[43];
+    const stringTable = parsed.lumps[44];
+
+    if (stringData.filelen && stringTable.filelen) {
+      const count = Math.floor(stringTable.filelen / 4);
+      for (let i = 0; i < count; i++) {
+        const rel = parsed.dv.getUint32(stringTable.fileofs + i * 4, true);
+        if (rel >= stringData.filelen) continue;
+        const value = normalizePath(extractCString(bytes, stringData.fileofs + rel, stringData.fileofs + stringData.filelen));
+        if (value) refs.add(value);
+      }
+    }
+
+    const scan = bytes.subarray(0, Math.min(bytes.length, MAX_BSP_TEXT_SCAN_BYTES));
+    const text = new TextDecoder('latin1').decode(scan);
+    const vmtRe = /[a-zA-Z0-9_./\\-]{2,}\.vmt/g;
+    let match;
+    while ((match = vmtRe.exec(text))) {
+      const value = normalizePath(match[0]).replace(/^materials\//, '');
+      if (value) refs.add(value);
+    }
+    return refs;
+  }
+
+  function vmtRootShader(text) {
+    const clean = String(text || '')
+      .replace(/^\uFEFF/, '')
+      .replace(/\/\/[^\r\n]*/g, '')
+      .trim();
+    const match = clean.match(/^(?:"([^"]+)"|([a-zA-Z0-9_]+))/);
+    return match ? String(match[1] || match[2] || '').trim() : '';
+  }
+
+  function vmtPatchInclude(text) {
+    const match = String(text || '').match(/"?include"?\s*"([^"]+)"/i);
+    return match ? match[1] : '';
+  }
+
+  async function materialShaderName(path, entries, filesByRel, cache, log, depth = 0) {
+    if (!path || depth > 4) return '';
+    if (cache.has(path)) return cache.get(path);
+    const descriptor = entries.get(path);
+    if (!descriptor || Number(descriptor.size || 0) > MAX_VMT_BYTES) {
+      cache.set(path, '');
+      return '';
+    }
+
+    try {
+      const blob = await readDescriptor(descriptor, filesByRel);
+      const text = await blob.text();
+      const root = vmtRootShader(text);
+      if (compactShaderName(root) === 'patch') {
+        const include = vmtPatchInclude(text);
+        const preferred = path.startsWith('/hl2/') ? 'hl2' : 'portal';
+        const includedPath = include ? resolveMaterialEntry(entries, include, preferred) : null;
+        const shader = includedPath
+          ? await materialShaderName(includedPath, entries, filesByRel, cache, log, depth + 1)
+          : '';
+        cache.set(path, shader);
+        return shader;
+      }
+      cache.set(path, root);
+      return root;
+    } catch (error) {
+      log(`Map shader scan skipped ${path}: ${error?.message || error}`);
+      cache.set(path, '');
+      return '';
+    }
+  }
+
+  function buildCompiledShaderIndex(entries) {
+    const index = new Map();
+    for (const path of entries.keys()) {
+      if (!SHADER_RE.test(path)) continue;
+      const key = compactShaderName(compiledShaderFamily(path));
+      if (!key) continue;
+      if (!index.has(key)) index.set(key, []);
+      index.get(key).push(path);
+    }
+    for (const paths of index.values()) paths.sort();
+    return index;
+  }
+
+  function shaderPathsForMaterial(shaderName, shaderIndex) {
+    const out = new Set();
+    const candidates = materialShaderCandidateKeys(shaderName);
+    for (const candidate of candidates) {
+      for (const [compiledKey, paths] of shaderIndex) {
+        if (compiledKey === candidate || compiledKey.startsWith(candidate)) {
+          for (const path of paths) out.add(path);
+        }
+      }
+    }
+    return out;
+  }
+
+  async function packDescriptors(paths, entries, filesByRel) {
+    const encoder = new TextEncoder();
+    const parts = [];
+    let bytes = 0;
+    let records = 0;
+    for (const path of [...paths].sort()) {
+      const descriptor = entries.get(path);
+      if (!descriptor) continue;
+      const blob = await readDescriptor(descriptor, filesByRel);
+      const pathBytes = encoder.encode(path);
+      const header = new Uint8Array(8);
+      const view = new DataView(header.buffer);
+      view.setUint32(0, pathBytes.length, true);
+      view.setUint32(4, blob.size, true);
+      parts.push(header, pathBytes, blob);
+      bytes += 8 + pathBytes.length + blob.size;
+      records++;
+    }
+    return { blob: new Blob(parts, { type: 'application/octet-stream' }), bytes, records };
+  }
+
+  async function buildMapShaderPacks(entries, filesByRel, bootSelectedPaths, log) {
+    await caches.delete(MAP_SHADER_CACHE_NAME);
+    const cache = await caches.open(MAP_SHADER_CACHE_NAME);
+    const shaderIndex = buildCompiledShaderIndex(entries);
+    const vmtShaderCache = new Map();
+    const seenShaderPaths = new Set([...bootSelectedPaths].map(normalizePath));
+    const results = [];
+
+    log(`Map shader index: ${shaderIndex.size} compiled retail shader families available for lazy map packs.`);
+
+    for (const mapName of MAPS) {
+      let mapPath = resolveGameEntry(entries, `maps/${mapName}.bsp`, 'portal');
+      if (!mapPath) mapPath = findEntryBySuffix(entries, `maps/${mapName}.bsp`);
+      if (!mapPath) {
+        results.push({ mapName, skipped: true, reason: 'map not found' });
+        continue;
+      }
+
+      const requiredShaderNames = new Set();
+      try {
+        const mapBlob = await readDescriptor(entries.get(mapPath), filesByRel);
+        const refs = discoverBSPMaterialRefs(await mapBlob.arrayBuffer());
+        for (const material of refs) {
+          const preferred = mapPath.startsWith('/hl2/') ? 'hl2' : 'portal';
+          const vmtPath = resolveMaterialEntry(entries, material, preferred);
+          if (!vmtPath) continue;
+          const shader = await materialShaderName(vmtPath, entries, filesByRel, vmtShaderCache, log);
+          if (shader) requiredShaderNames.add(shader);
+        }
+      } catch (error) {
+        log(`Map shader scan failed for ${mapName}: ${error?.message || error}`);
+      }
+
+      const deltaPaths = new Set();
+      const matchedFamilies = new Set();
+      for (const shaderName of requiredShaderNames) {
+        const matches = shaderPathsForMaterial(shaderName, shaderIndex);
+        if (!matches.size) {
+          log(`Map shader manifest: no compiled .vcs family matched ${shaderName} for ${mapName}.`);
+          continue;
+        }
+        matchedFamilies.add(shaderName);
+        for (const path of matches) {
+          const normalized = normalizePath(path);
+          if (seenShaderPaths.has(normalized)) continue;
+          const descriptor = entries.get(path);
+          if (!descriptor || Number(descriptor.size || 0) > MAX_SINGLE_SHADER_BYTES) continue;
+          seenShaderPaths.add(normalized);
+          deltaPaths.add(path);
+        }
+      }
+
+      if (!deltaPaths.size) {
+        results.push({
+          mapName,
+          records: 0,
+          bytes: 0,
+          shaderFamilies: [...matchedFamilies]
+        });
+        continue;
+      }
+
+      const packed = await packDescriptors(deltaPaths, entries, filesByRel);
+      const url = new URL(`./shader-packs/${mapName}.data`, location.href).href;
+      await cache.put(url, new Response(packed.blob, {
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          'X-Render360-Shader-Pack': 'map-v1',
+          'X-Render360-Map': mapName,
+          'X-Render360-Shader-Records': String(packed.records),
+          'X-Render360-Shader-Bytes': String(packed.bytes),
+          'X-Render360-Shader-Families': [...matchedFamilies].join(',').slice(0, 4096)
+        }
+      }));
+
+      log(`Map shader pack ${mapName}: ${packed.records} new .vcs files, ${(packed.bytes / 1048576).toFixed(2)} MiB, families=${[...matchedFamilies].join(',') || 'none'}.`);
+      results.push({
+        mapName,
+        records: packed.records,
+        bytes: packed.bytes,
+        shaderFamilies: [...matchedFamilies]
+      });
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
+
+    return results;
+  }
+
   async function build(files, options = {}) {
     if (!('caches' in globalThis)) throw new Error('Cache Storage is unavailable.');
     const log = typeof options.log === 'function' ? options.log : () => {};
     const indexed = await indexTargets(files, log);
-    const { found, filesByRel, fixedFound } = indexed;
+    const { found, gameEntries, filesByRel, fixedFound } = indexed;
     if (!found.size) throw new Error('None of the shared Source boot assets were found in the selected Portal install.');
     if (!indexed.selectedShaderFiles) throw new Error('No first-frame Source .vcs shader families were found in the selected Portal/HL2/platform files.');
 
@@ -405,6 +718,9 @@
     log(`Boot shader families: ${selection.includedFamilies.map(x => x.family).join(', ') || 'none'}.`);
     if (selection.omittedFamilies.length) log(`Deferred shader families: ${selection.omittedFamilies.map(x => x.family).join(', ')}.`);
 
+    const bootSelectedPaths = new Set(descriptors.filter(x => x.category === 'shader').map(x => normalizePath(x.path)));
+    const mapShaderPacks = await buildMapShaderPacks(gameEntries, filesByRel, bootSelectedPaths, log);
+
     return {
       ok: true,
       manifestVersion: MANIFEST_VERSION,
@@ -418,6 +734,7 @@
       deferredShaderFiles: indexed.omittedShaderFiles,
       includedFamilies: selection.includedFamilies,
       omittedFamilies: selection.omittedFamilies,
+      mapShaderPacks,
       skippedHugeShaders: indexed.skippedHugeShaders,
       found: descriptors.map(x => x.path)
     };
@@ -435,12 +752,15 @@
 
   async function clear() {
     if (!('caches' in globalThis)) return;
-    const cache = await caches.open(CACHE_NAME);
-    await cache.delete(new URL(OVERLAY_PATH, location.href).href);
+    await Promise.all([
+      caches.delete(CACHE_NAME),
+      caches.delete(MAP_SHADER_CACHE_NAME)
+    ]);
   }
 
   globalThis.Render360PortalBootOverlay = {
     CACHE_NAME,
+    MAP_SHADER_CACHE_NAME,
     OVERLAY_PATH,
     MANIFEST_VERSION,
     BOOTSTRAP_SHADER_BUDGET_BYTES,
