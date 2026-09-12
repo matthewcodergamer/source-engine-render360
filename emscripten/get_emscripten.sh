@@ -88,3 +88,32 @@ for forbidden in (
 path.write_text(updated)
 print('Render360 Phase 4: patched modern glMapBufferRange validation')
 PY
+
+# Clang 24 no longer accepts the IVP codebase's historical implicit alloca()
+# declarations. Keep the physics code's behavior unchanged and make the
+# declaration explicit only for this Emscripten build. This patches the checked
+# out submodule in CI; it does not alter the source-physics submodule revision.
+python3 - <<'PY'
+from pathlib import Path
+
+root = Path('ivp')
+marker = '#if defined(__EMSCRIPTEN__)\n#include <alloca.h>\n#endif\n'
+patched = []
+for path in root.rglob('*'):
+    if path.suffix.lower() not in {'.c', '.cc', '.cpp', '.cxx', '.h', '.hh', '.hpp', '.hxx'}:
+        continue
+    try:
+        text = path.read_text()
+    except UnicodeDecodeError:
+        continue
+    if 'alloca(' not in text or marker in text:
+        continue
+    path.write_text(marker + text)
+    patched.append(str(path))
+
+if not patched:
+    raise SystemExit('Render360 Phase 4: no IVP alloca call sites were patched; source layout may have changed')
+print(f'Render360 Phase 4: added Emscripten alloca declarations to {len(patched)} IVP files')
+for path in patched:
+    print(f'  {path}')
+PY
