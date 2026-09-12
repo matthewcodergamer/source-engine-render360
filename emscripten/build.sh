@@ -128,6 +128,108 @@ path.write_text(updated)
 print('Render360 Portal: patched Sys_LoadModule optional browser-module handling')
 PY
 
+# Phase 4 transition masking hooks the real Source level state machine instead
+# of guessing with timers in JavaScript. Host_Changelevel is synchronous: signal
+# BEGIN immediately before it tears the old level down, and READY/FAILED as soon
+# as it returns. The signal crosses the app pthread via BroadcastChannel and the
+# browser main thread draws only a tiny CSS elevator-door mask; no old/new map or
+# canvas snapshot is duplicated for the effect.
+python3 - <<'PY'
+from pathlib import Path
+
+path = Path('engine/host_state.cpp')
+text = path.read_text()
+
+include_anchor = '#include "ccs.h"\n\n'
+include_block = '''#include "ccs.h"
+
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
+
+'''
+if '#include <emscripten.h>' not in text:
+    if include_anchor not in text:
+        raise SystemExit('Render360 Phase 4: host_state include anchor moved')
+    text = text.replace(include_anchor, include_block, 1)
+
+helper_anchor = 'static bool Host_ValidGame( void );\n'
+helper = r'''#ifdef __EMSCRIPTEN__
+static void Render360Phase4_TransitionSignal( const char *pKind, const char *pLevelName )
+{
+	EM_ASM({
+		if ( typeof globalThis.render360Phase4TransitionSignal === 'function' )
+		{
+			globalThis.render360Phase4TransitionSignal( UTF8ToString($0), UTF8ToString($1) );
+		}
+	}, pKind ? pKind : "", pLevelName ? pLevelName : "" );
+}
+#else
+static inline void Render360Phase4_TransitionSignal( const char *, const char * ) {}
+#endif
+
+static bool Host_ValidGame( void );
+'''
+if 'Render360Phase4_TransitionSignal' not in text:
+    if helper_anchor not in text:
+        raise SystemExit('Render360 Phase 4: Host_ValidGame anchor moved')
+    text = text.replace(helper_anchor, helper, 1)
+
+mp_old = '''\t\tif ( Host_Changelevel( false, m_levelName, m_landmarkName ) )
+\t\t{
+\t\t\tSetState( HS_RUN, true );
+\t\t\treturn;
+\t\t}
+'''
+mp_new = '''\t\tRender360Phase4_TransitionSignal( "begin", m_levelName );
+\t\tconst bool bRender360Changed = Host_Changelevel( false, m_levelName, m_landmarkName );
+\t\tRender360Phase4_TransitionSignal( bRender360Changed ? "ready" : "failed", m_levelName );
+\t\tif ( bRender360Changed )
+\t\t{
+\t\t\tSetState( HS_RUN, true );
+\t\t\treturn;
+\t\t}
+'''
+if 'bRender360Changed = Host_Changelevel( false' not in text:
+    if mp_old not in text:
+        raise SystemExit('Render360 Phase 4: multiplayer Host_Changelevel block moved')
+    text = text.replace(mp_old, mp_new, 1)
+
+sp_old = '''\tif ( Host_ValidGame() )
+\t{
+\t\tHost_Changelevel( true, m_levelName, m_landmarkName );
+\t\tSetState( HS_RUN, true );
+\t\treturn;
+\t}
+'''
+sp_new = '''\tif ( Host_ValidGame() )
+\t{
+\t\tRender360Phase4_TransitionSignal( "begin", m_levelName );
+\t\tconst bool bRender360Changed = Host_Changelevel( true, m_levelName, m_landmarkName );
+\t\tRender360Phase4_TransitionSignal( bRender360Changed ? "ready" : "failed", m_levelName );
+\t\tSetState( HS_RUN, true );
+\t\treturn;
+\t}
+'''
+if 'bRender360Changed = Host_Changelevel( true' not in text:
+    if sp_old not in text:
+        raise SystemExit('Render360 Phase 4: single-player Host_Changelevel block moved')
+    text = text.replace(sp_old, sp_new, 1)
+
+for marker in (
+    '#include <emscripten.h>',
+    'Render360Phase4_TransitionSignal( "begin", m_levelName )',
+    'bRender360Changed = Host_Changelevel( true',
+    'bRender360Changed = Host_Changelevel( false',
+    'render360Phase4TransitionSignal',
+):
+    if marker not in text:
+        raise SystemExit(f'Render360 Phase 4: transition patch missing marker: {marker}')
+
+path.write_text(text)
+print('Render360 Phase 4: patched Source Host_Changelevel transition signals')
+PY
+
 python3 waf configure -T $buildtype --notests -4 --togles --emscripten \
 	--disable-warns --build-games=portal --prefix=build/install
 python3 waf install $@
@@ -206,6 +308,7 @@ EMCC_FORCE_STDLIBS=libc,libc++,libc++abi emcc -Os \
 	-lworkerfs.js \
 	--pre-js build/render360-phase4-config.js \
 	--pre-js emscripten/phase4-memory-profile.js \
+	--pre-js emscripten/phase4-transition-mask.js \
 	--pre-js emscripten/pre.js \
 	--post-js emscripten/phase3-workerfs.js --post-js emscripten/post.js \
 	$preload_libs \
@@ -222,7 +325,9 @@ cat > build/install/render360-phase4-profile.json <<EOF
   "growableArrayBuffers": $RENDER360_GROWABLE_ARRAYBUFFERS,
   "pthreadPoolSize": 2,
   "directRetailVpk": true,
-  "currentMapOnly": true
+  "currentMapOnly": true,
+  "transitionMask": "css-elevator-host-changelevel",
+  "transitionMapPrefetch": false
 }
 EOF
 
