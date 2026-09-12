@@ -52,6 +52,8 @@ jobs:
           grep -q -- '-sMAXIMUM_MEMORY=1024mb' emscripten/build.sh
           grep -q -- '-sMEMORY_GROWTH_LINEAR_STEP=32mb' emscripten/build.sh
           grep -q -- '--preload-file' emscripten/build.sh
+          grep -q -- '-lworkerfs.js' emscripten/build.sh
+          grep -q -- 'phase3-workerfs.js' emscripten/build.sh
           grep -Fq 'EMCC_FORCE_STDLIBS=libc,libc++,libc++abi' emscripten/build.sh
           if grep -q -- '-sMALLOC=mimalloc' emscripten/build.sh; then
             echo 'Render360 Portal: mimalloc returned to the iPhone release profile.' >&2
@@ -87,6 +89,9 @@ jobs:
           grep -q 'BOOT_OVERLAY_PATH' emscripten/render360-pages-sw.js
           grep -q 'local-boot' emscripten/render360-pages-sw.js
           grep -q 'fetchLauncherDataDirect' emscripten/render360-pages-sw.js
+          grep -q 'WORKERFS' emscripten/phase3-workerfs.js
+          grep -q 'render360-direct-vpk' emscripten/phase3-workerfs.js
+          grep -q 'background1 chunk preload is disabled' emscripten/phase3-workerfs.js
 
       - name: Validate dual-source staging JavaScript
         shell: bash
@@ -96,9 +101,13 @@ jobs:
           node --check emscripten/portal-boot-overlay.js
           node --check emscripten/render360-pages-sw.js
           node --check emscripten/pre.js
+          node --check emscripten/phase3-workerfs.js
+          node --check emscripten/assets/phase3-staging.js
           grep -q 'debugluxelsnoalpha.vtf' emscripten/portal-boot-overlay.js
           grep -q 'identitylightwarp.vtf' emscripten/portal-boot-overlay.js
           grep -q 'normalizedrandomdirections2d.vtf' emscripten/portal-boot-overlay.js
+          grep -q 'Launch Phase 3' emscripten/assets/phase3-staging.js
+          grep -q 'render360-retail-request' emscripten/assets/phase3-staging.js
           python3 - <<'PY'
           import re
           from pathlib import Path
@@ -140,8 +149,11 @@ jobs:
           grep -a -q 'libengine.so' build/install/hl2_launcher.js
           grep -a -q 'libfilesystem_stdio.so' build/install/hl2_launcher.js
           grep -a -q 'probable-process-kill-reload' build/install/hl2_launcher.js
+          grep -a -q 'render360-direct-vpk' build/install/hl2_launcher.js
+          grep -a -q 'WORKERFS' build/install/hl2_launcher.js
           test -s emscripten/portal-local-vpk.js
           test -s emscripten/portal-boot-overlay.js
+          test -s emscripten/assets/phase3-staging.js
           grep -q 'Portal JS exception' build/install/hl2_launcher.html
           grep -q 'chunks/${mapName}.data' emscripten/pre.js
           grep -q 'streamDataResponse' emscripten/pre.js
@@ -183,7 +195,11 @@ jobs:
               text = text.replace(old, new, 1)
 
           old = '<script src="./portal-local-vpk.js"></script>'
-          replace_once(old, old + '\n<script src="./portal-boot-overlay.js"></script>', 'local VPK script tag')
+          replace_once(
+              old,
+              old + '\n<script src="./portal-boot-overlay.js"></script>\n<script src="./assets/phase3-staging.js"></script>',
+              'local VPK script tag'
+          )
 
           old = "const registration=await navigator.serviceWorker.register('./render360-pages-sw.js',{scope:'./'});"
           new = "const registration=await navigator.serviceWorker.register('./render360-pages-sw.js',{scope:'./',updateViaCache:'none'});await registration.update();"
@@ -248,12 +264,14 @@ jobs:
           PY
 
           grep -q 'portal-boot-overlay.js' build/install/index.html
+          grep -q 'assets/phase3-staging.js' build/install/index.html
           grep -q 'Render360PortalBootOverlay.build' build/install/index.html
           grep -q 'Render360PortalBootOverlay.hasOverlay' build/install/index.html
           grep -q 'chunk.ok&&bootReady&&!buildingLocal' build/install/index.html
           grep -q "updateViaCache:'none'" build/install/index.html
           grep -q "registration.update()" build/install/index.html
           grep -q "hl2_launcher.html?render360=" build/install/index.html
+          test -s build/install/assets/phase3-staging.js
 
           touch build/install/.nojekyll
 
@@ -273,9 +291,13 @@ jobs:
             "defaultPthreadStackMiB": 1,
             "releaseLinkOptimization": "-Os",
             "sideModuleOptimization": "-Os",
-            "streamedPortalData": true,
+            "streamedPortalDataFallback": true,
+            "directRetailVpk": true,
+            "directRetailBackend": "workerfs-file-blob",
+            "sameDocumentFileOwner": "staging-parent-with-runtime-iframe",
+            "background1MemfsPreloadInPhase3": false,
             "crashLoopGuard": true,
-            "bootAssetOverlay": "selected-portal-vpk",
+            "bootAssetOverlay": "phase2-compatibility-fallback",
             "diagnostics": true,
             "pagesIsolation": "service-worker-staging-only",
             "runtimeChunkPath": "chunks/<map>.data",
