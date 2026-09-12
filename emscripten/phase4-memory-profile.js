@@ -10,14 +10,15 @@
   const sharedProto = typeof SharedArrayBuffer !== 'undefined'
     ? SharedArrayBuffer.prototype
     : null
+  const build = Module.render360Phase4BuildConfig || {}
 
   const profile = {
     name: 'phase4-growable-arraybuffers',
-    emscripten: '6.0.6',
-    initialMemoryMiB: 320,
-    maximumMemoryMiB: 1024,
-    linearGrowthMiB: 32,
-    growableArrayBuffers: 1,
+    emscripten: String(build.emscripten || 'unknown'),
+    initialMemoryMiB: Number(build.initialMemoryMiB || 0),
+    maximumMemoryMiB: Number(build.maximumMemoryMiB || 0),
+    linearGrowthMiB: Number(build.linearGrowthMiB || 0),
+    growableArrayBuffers: Number(build.growableArrayBuffers || 0),
     wasmResizableBufferAPI: !!(memoryProto && typeof memoryProto.toResizableBuffer === 'function'),
     wasmFixedLengthBufferAPI: !!(memoryProto && typeof memoryProto.toFixedLengthBuffer === 'function'),
     growableSharedArrayBufferAPI: !!(sharedProto && typeof sharedProto.grow === 'function'),
