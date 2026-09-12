@@ -8,6 +8,7 @@
   const DIRECT_LOOSE_RE = /\/(?:gameinfo\.txt|steam\.inf|game\.inf)$/i;
   const DIRECT_SMALL_TREE_RE = /\/(?:cfg|resource|scripts)\//i;
   const MAX_LOOSE_BYTES = 8 * 1024 * 1024;
+  const RESIDENCY_POLICY = 'menu-only → current-map-only → no future-map prefetch';
 
   let retailDescriptors = [];
   let runtimeFrame = null;
@@ -59,8 +60,8 @@
     phase3Button.disabled = !ready;
     globalThis.render360Phase3DirectSelected = ready;
     if(ready) {
-      phase3Button.textContent = 'Launch Phase 3 · Direct VPK';
-      setPhase3Status(`Phase 3 ready: ${stats.vpks} VPK files stay as browser File objects; background1 will not be unpacked into MEMFS.`);
+      phase3Button.textContent = 'Launch Phase 3 · Current Map Only';
+      setPhase3Status(`Phase 3 ready: ${stats.vpks} VPK files stay browser-backed. Policy: ${RESIDENCY_POLICY}. background1 and future chambers are never accumulated in MEMFS.`);
     }
   }
 
@@ -79,7 +80,7 @@
     try {
       sessionStorage.setItem('render360-phase3-retail-summary-v1', JSON.stringify({
         at: Date.now(), files: stats.files, vpks: stats.vpks, dirs: stats.dirs,
-        bytes: stats.bytes, gameinfo: stats.gameinfo
+        bytes: stats.bytes, gameinfo: stats.gameinfo, residencyPolicy: RESIDENCY_POLICY
       }));
     } catch(_) {}
     refreshButton();
@@ -124,6 +125,8 @@
 
     closeRuntime();
     markFreshLaunch();
+    globalThis.render360Phase3DirectSelected = true;
+    setPhase3Status(`Starting Phase 3. ${RESIDENCY_POLICY}.`);
 
     const overlay = document.createElement('div');
     overlay.id = 'render360Phase3Runtime';
@@ -139,7 +142,7 @@
     back.addEventListener('click', closeRuntime);
 
     const label = document.createElement('span');
-    label.textContent = `Phase 3 · direct VPK · ${stats.vpks} VPK files · retail bytes outside MEMFS`;
+    label.textContent = `Phase 3 · current-map-only · ${stats.vpks} VPKs browser-backed · no future-map prefetch`;
     label.style.cssText = 'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
     bar.append(back, label);
 
@@ -173,7 +176,7 @@
       button.id = 'launchPhase3';
       button.type = 'button';
       button.disabled = true;
-      button.textContent = 'Launch Phase 3 · Direct VPK';
+      button.textContent = 'Launch Phase 3 · Current Map Only';
       button.addEventListener('click', launchDirectVPK);
       actions.prepend(button);
       phase3Button = button;
