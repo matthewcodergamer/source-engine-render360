@@ -161,7 +161,16 @@ def get_optimization_flags(conf):
 		cflags = [flag for flag in cflags if flag not in ('-O2', '-ftree-vectorize')]
 		if '-Os' not in cflags:
 			cflags.append('-Os')
-		Logs.pprint('CYAN', 'Render360 Portal: Emscripten release uses -Os for iPhone memory budget')
+
+		# Emscripten 6.0.6 ships Clang 24, which no longer accepts the IVP
+		# physics code's historical implicit alloca() declarations. Force the
+		# standard declaration into every Wasm translation unit. This is a
+		# compile-compatibility header only; alloca still lowers to the same
+		# stack allocation and does not add heap residency on iPhone.
+		if '-include' not in cflags:
+			cflags.extend(['-include', 'alloca.h'])
+
+		Logs.pprint('CYAN', 'Render360 Portal: Emscripten release uses -Os + explicit alloca.h for iPhone memory budget')
 
 	if conf.options.LTO:
 		linkflags+= conf.get_flags_by_compiler(LTO_LINKFLAGS, conf.env.COMPILER_CC)
