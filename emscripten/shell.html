@@ -74,9 +74,41 @@
       var render360LatestOutput = '';
       var RENDER360_OUTPUT_MAX_CHARS = 4096;
       var RENDER360_LOG_MAX_CHARS = RENDER360_OUTPUT_MAX_CHARS;
+      var RENDER360_SHADER_DIAG_KEY = 'render360-missing-shader-v1';
+
+      function render360ShaderFamilyFromPath(path) {
+        var clean = String(path || '').replace(/\\/g, '/').toLowerCase();
+        var base = clean.slice(clean.lastIndexOf('/') + 1).replace(/\.vcs$/i, '');
+        return base.replace(/_(?:vs|ps|vsh|psh)[a-z0-9_]*$/i, '') || base;
+      }
+
+      function render360ObserveShaderLine(text) {
+        var line = String(text || '');
+        var match = line.match(/((?:portal\/|hl2\/|platform\/)?shaders\/(?:fxc|vsh|psh)\/[^\s"<>]+\.vcs)/i);
+        if (!match) return;
+        if (!/(?:missing|not found|couldn.t|cannot|can.t|failed|failure|unable|error|open failed)/i.test(line)) return;
+        var path = match[1].replace(/\\/g, '/');
+        var diagnostic = {
+          at: Date.now(),
+          path: path,
+          family: render360ShaderFamilyFromPath(path),
+          line: line.slice(-1024)
+        };
+        try { localStorage.setItem(RENDER360_SHADER_DIAG_KEY, JSON.stringify(diagnostic)); } catch (_) {}
+        if (diagnosticStatusElement) diagnosticStatusElement.textContent = 'Missing shader family: ' + diagnostic.family;
+      }
+
+      // A deliberate launch starts a fresh missing-shader checkpoint. Safari's
+      // automatic crash reload normally reports navigation type "reload", so
+      // the final missing path survives long enough to copy after the restart.
+      try {
+        var navEntry = performance.getEntriesByType && performance.getEntriesByType('navigation')[0];
+        if (navEntry && navEntry.type === 'navigate') localStorage.removeItem(RENDER360_SHADER_DIAG_KEY);
+      } catch (_) {}
 
       function render360AppendOutput(text) {
         var line = String(text || '');
+        render360ObserveShaderLine(line);
         if (line.length > RENDER360_OUTPUT_MAX_CHARS) line = line.slice(-RENDER360_OUTPUT_MAX_CHARS);
         render360LatestOutput = line;
       }
@@ -98,8 +130,10 @@
         try {
           var crashState = localStorage.getItem('render360-ios-crash-state-v2');
           if (crashState) lines.splice(8, 0, 'crashState=' + crashState);
+          var latestShader = localStorage.getItem(RENDER360_SHADER_DIAG_KEY);
+          if (latestShader) lines.splice(9, 0, 'latestMissingShader=' + latestShader);
           var lastError = localStorage.getItem('render360-ios-last-error-v1');
-          if (lastError) lines.splice(9, 0, 'lastError=' + lastError);
+          if (lastError) lines.splice(10, 0, 'lastError=' + lastError);
         } catch (_) {}
         return lines.join('\n');
       }
