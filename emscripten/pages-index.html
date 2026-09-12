@@ -78,10 +78,10 @@
 
   <section class="card">
     <strong>Diagnostics</strong>
-    <p id="logSummary" class="small">Detailed text is kept off-screen to avoid a growing DOM log on iPhone.</p>
+    <p id="logSummary" class="small">Only the latest staging event is retained; completed steps are discarded.</p>
     <div class="actions">
       <button id="copyLog" class="secondary" type="button">Copy diagnostics</button>
-      <button id="clearLog" class="secondary" type="button">Clear buffered log</button>
+      <button id="clearLog" class="secondary" type="button">Clear latest event</button>
     </div>
   </section>
 </main>
@@ -92,10 +92,8 @@
   const OWNERSHIP_KEY='render360PortalOwnershipVerified';
   const CRASH_STATE_KEY='render360-ios-crash-state-v2';
   const $=id=>document.getElementById(id);
-  const LOG_MAX_CHARS=65536;
-  let logChunks=[];
-  let logHead=0;
-  let logChars=0;
+  const LOG_MAX_CHARS=4096;
+  let latestLogLine='';
   let selectedPortalFiles=[];
   let selectedFromFolder=false;
   let buildingLocal=false;
@@ -106,17 +104,11 @@
     try{return JSON.stringify(x)}catch(_){return String(x)}
   };
   const appendLogLine=line=>{
-    line=String(line)+'\n';
+    line=String(line||'');
     if(line.length>LOG_MAX_CHARS)line=line.slice(-LOG_MAX_CHARS);
-    logChunks.push(line);logChars+=line.length;
-    while(logChars>LOG_MAX_CHARS&&logHead<logChunks.length-1){logChars-=logChunks[logHead].length;logChunks[logHead]='';logHead++}
-    if(logHead>256){logChunks=logChunks.slice(logHead);logHead=0}
+    latestLogLine=line;
   };
-  const logText=()=>{
-    let text=logChunks.slice(logHead).join('');
-    if(text.length>LOG_MAX_CHARS)text=text.slice(-LOG_MAX_CHARS);
-    return text;
-  };
+  const logText=()=>latestLogLine;
   const log=(...args)=>{
     const line=args.map(safeString).join(' ');
     appendLogLine(line);
@@ -157,8 +149,8 @@
       'chunkSource='+String(lastChunkProbe.source||'unavailable'),
       'crashState='+(state?JSON.stringify(state):'none'),
       '',
-      '--- buffered staging log (latest 64 KiB) ---',
-      logText()
+      '--- latest staging event only ---',
+      logText()||'<none>'
     ].join('\n');
   };
   const copyDiagnostics=async()=>{
@@ -168,7 +160,7 @@
       else{
         const temp=document.createElement('textarea');temp.value=text;temp.setAttribute('readonly','');temp.style.position='fixed';temp.style.opacity='0';document.body.appendChild(temp);temp.select();document.execCommand('copy');temp.remove();
       }
-      $('logSummary').textContent=`Copied ${Math.ceil(text.length/1024)} KiB of diagnostics.`;
+      $('logSummary').textContent='Copied latest diagnostic state.';
     }catch(error){$('logSummary').textContent='Copy failed: '+String(error?.message||error)}
   };
 
@@ -381,7 +373,7 @@
   $('buildLocal').addEventListener('click',()=>buildLocalFallback(false));
   $('clearLocal').addEventListener('click',async()=>{if(globalThis.Render360PortalVPK)await Render360PortalVPK.clearLocalChunks();if(navigator.serviceWorker.controller)navigator.serviceWorker.controller.postMessage({type:'RENDER360_CLEAR_LOCAL_CHUNKS'});$('localProgress').hidden=true;$('localProgressText').textContent='Local VPK chunks cleared.';await refresh()});
   $('copyLog').addEventListener('click',copyDiagnostics);
-  $('clearLog').addEventListener('click',()=>{logChunks=[];logHead=0;logChars=0;$('logSummary').textContent='Buffered diagnostics cleared.'});
+  $('clearLog').addEventListener('click',()=>{latestLogLine='';$('logSummary').textContent='Latest diagnostic event cleared.'});
   $('launch').addEventListener('click',markManualRelaunch);
   $('launch').addEventListener('click',()=>{location.href='./hl2_launcher.html'});
   $('reload').addEventListener('click',()=>{sessionStorage.removeItem('render360PagesReloaded');location.reload()});
