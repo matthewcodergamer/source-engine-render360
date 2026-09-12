@@ -45,13 +45,18 @@ jobs:
           grep -q -- '-sMAIN_MODULE' emscripten/build.sh
           grep -q -- '-sINCLUDE_FULL_LIBRARY=1' emscripten/build.sh
           grep -q -- '-Os' emscripten/build.sh
+          grep -q -- '-sMALLOC=dlmalloc' emscripten/build.sh
+          grep -q -- '-sDEFAULT_PTHREAD_STACK_SIZE=1mb' emscripten/build.sh
           grep -q -- '-sINITIAL_MEMORY=384mb' emscripten/build.sh
           grep -q -- '-sALLOW_MEMORY_GROWTH=1' emscripten/build.sh
           grep -q -- '-sMAXIMUM_MEMORY=1024mb' emscripten/build.sh
           grep -q -- '-sMEMORY_GROWTH_LINEAR_STEP=32mb' emscripten/build.sh
-          grep -q -- '-sGROWABLE_ARRAYBUFFERS=1' emscripten/build.sh
           grep -q -- '--preload-file' emscripten/build.sh
           grep -Fq 'EMCC_FORCE_STDLIBS=libc,libc++,libc++abi' emscripten/build.sh
+          if grep -q -- '-sMALLOC=mimalloc' emscripten/build.sh; then
+            echo 'Render360 Portal: mimalloc returned to the iPhone release profile.' >&2
+            exit 1
+          fi
           if grep -q -- '--profiling-funcs' emscripten/build.sh; then
             echo 'Render360 Portal: profiling function names returned to the iPhone release build.' >&2
             exit 1
@@ -65,6 +70,12 @@ jobs:
           grep -q 'response.body.getReader' emscripten/pre.js
           grep -q 'createDataFile' emscripten/pre.js
           grep -q 'await this.loadBootOverlay()' emscripten/pre.js
+          grep -q 'render360-ios-crash-state-v2' emscripten/pre.js
+          grep -q 'probable-process-kill-reload' emscripten/pre.js
+          grep -q 'render360ResidentBytes' emscripten/pre.js
+          grep -q 'Render360: loaded module:' emscripten/build.sh
+          grep -q "conf.env.DEST_OS == 'wasm'" scripts/waifulib/compiler_optimizations.py
+          grep -q "cflags.append('-Os')" scripts/waifulib/compiler_optimizations.py
           if grep -q 'background preload failed' emscripten/pre.js; then
             echo 'Render360 Portal: speculative next-map preload returned unexpectedly.' >&2
             exit 1
@@ -128,11 +139,27 @@ jobs:
           grep -a -q 'hl2_launcher.data' build/install/hl2_launcher.js
           grep -a -q 'libengine.so' build/install/hl2_launcher.js
           grep -a -q 'libfilesystem_stdio.so' build/install/hl2_launcher.js
+          grep -a -q 'probable-process-kill-reload' build/install/hl2_launcher.js
           test -s emscripten/portal-local-vpk.js
           test -s emscripten/portal-boot-overlay.js
           grep -q 'Portal JS exception' build/install/hl2_launcher.html
           grep -q 'chunks/${mapName}.data' emscripten/pre.js
           grep -q 'streamDataResponse' emscripten/pre.js
+
+          python3 - <<'PY'
+          from pathlib import Path
+          mib = 1024 * 1024
+          wasm = Path('build/install/hl2_launcher.wasm').stat().st_size
+          data = Path('build/install/hl2_launcher.data').stat().st_size
+          side = sum(p.stat().st_size for p in Path('build/install').glob('*.so'))
+          print(f'Render360 deploy sizes: main_wasm={wasm/mib:.1f} MiB data={data/mib:.1f} MiB side_modules={side/mib:.1f} MiB')
+          if wasm > 8 * mib:
+              raise SystemExit('Render360 Portal: MAIN_MODULE exceeded 8 MiB iPhone size budget')
+          if data > 64 * mib:
+              raise SystemExit('Render360 Portal: preload package exceeded 64 MiB iPhone size budget')
+          if side > 80 * mib:
+              raise SystemExit('Render360 Portal: Wasm SIDE_MODULE set exceeded 80 MiB iPhone size budget')
+          PY
 
           if find build/install -type f -path '*/chunks/*.data' -print -quit | grep -q .; then
             echo 'Refusing to publish bundled Portal .data chunks.' >&2
@@ -240,9 +267,14 @@ jobs:
             "maximumMemoryMiB": 1024,
             "memoryGrowthMiB": 32,
             "memoryGrowth": true,
-            "growableArrayBuffers": true,
+            "growableArrayBuffers": false,
+            "allocator": "dlmalloc",
+            "pthreadPoolSize": 2,
+            "defaultPthreadStackMiB": 1,
             "releaseLinkOptimization": "-Os",
+            "sideModuleOptimization": "-Os",
             "streamedPortalData": true,
+            "crashLoopGuard": true,
             "bootAssetOverlay": "selected-portal-vpk",
             "diagnostics": true,
             "pagesIsolation": "service-worker-staging-only",
