@@ -11,7 +11,7 @@
   // but that pushed the bootstrap to roughly 51 MiB on the test install. Keep
   // only deterministic shader families needed by the menu/background startup.
   // Any family discovered later can be added explicitly to this manifest.
-  const CACHE_NAME = 'render360-portal-boot-overlay-v2';
+  const CACHE_NAME = 'render360-portal-boot-overlay-v3';
   const OVERLAY_PATH = './render360-bootstrap-overlay.data';
   const MANIFEST_VERSION = 'portal-first-frame-v1';
   const BOOTSTRAP_SHADER_BUDGET_BYTES = 20 * 1024 * 1024;
@@ -130,8 +130,6 @@
   }
 
   function descriptorCost(descriptor) {
-    // Include a conservative path/header allowance so the hard budget applies
-    // to the packed overlay, not just retail payload bytes.
     return Number(descriptor.size || 0) + 8 + String(descriptor.path || '').length * 2;
   }
 
