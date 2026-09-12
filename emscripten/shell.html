@@ -44,12 +44,12 @@
 
       // Source is extremely chatty during module/material startup. Repeatedly
       // doing textarea.value += line makes WebKit copy an ever-growing string on
-      // every log line, which creates substantial transient memory exactly while
-      // the Wasm heap, map data and pthread workers are also resident. Keep only
-      // a bounded diagnostic tail and batch DOM writes to one per animation frame.
+      // every log line, which creates transient memory exactly while the Wasm
+      // heap and SIDE_MODULE compilation are at their peak. Keep only a compact
+      // tail on the constrained iPhone runtime and batch DOM writes to one/frame.
       var render360OutputBuffer = '';
       var render360OutputFlushPending = false;
-      var RENDER360_OUTPUT_MAX_CHARS = 196608;
+      var RENDER360_OUTPUT_MAX_CHARS = 65536;
       if (outputElement) outputElement.value = '';
 
       function render360AppendOutput(text) {
@@ -80,10 +80,6 @@
       }
 
       async function render360RequestFullscreen() {
-        // Do not call Emscripten's requestFullscreen wrapper on iPhone. The
-        // wrapper may target an internal canvas container that WebKit does not
-        // expose as a fullscreen-capable element. Use the browser API directly
-        // when Safari exposes it, otherwise keep Portal inline/standalone.
         try {
           var target = canvasElement;
           var request = target.requestFullscreen || target.webkitRequestFullscreen;
@@ -100,8 +96,6 @@
         }
       }
 
-      // Keep the context recoverable, but expose the actual WebGL lifecycle instead
-      // of stopping at an alert on iPhone Safari.
       canvasElement.addEventListener('webglcontextlost', (e) => {
         render360Report('WebGL context lost', e.statusMessage || 'context lost');
         e.preventDefault();
