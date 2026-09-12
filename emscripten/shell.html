@@ -58,7 +58,7 @@
 
     <div id="render360_diagnostics">
       <button type="button" onclick="render360CopyDiagnostics()">Copy diagnostics</button>
-      <span id="render360_diagnostic_status">Log kept off-screen to save memory</span>
+      <span id="render360_diagnostic_status">Only the latest runtime event is retained</span>
     </div>
 
     <script type='text/javascript'>
@@ -68,39 +68,20 @@
       var canvasElement = document.getElementById('canvas');
       var diagnosticStatusElement = document.getElementById('render360_diagnostic_status');
 
-      // Do not mirror Source's very chatty startup log into a textarea/pre.
-      // WebKit otherwise owns both the JS string and a second DOM text backing
-      // store, and each update can transiently copy the whole log. Keep a small
-      // chunked tail only; join it only if the tester taps Copy diagnostics.
-      var render360LogChunks = [];
-      var render360LogHead = 0;
-      var render360LogChars = 0;
-      var RENDER360_LOG_MAX_CHARS = 65536;
-      // Compatibility marker retained for the existing CI architecture check.
-      // The runtime no longer maintains a DOM output element; both names point
-      // at the same bounded off-screen diagnostic budget.
-      var RENDER360_OUTPUT_MAX_CHARS = RENDER360_LOG_MAX_CHARS;
+      // Keep exactly one recent event instead of a growing log. Anything that
+      // completed successfully is no longer useful for locating the stopping
+      // point, and retaining it only adds string/DOM pressure on iPhone Safari.
+      var render360LatestOutput = '';
+      var RENDER360_OUTPUT_MAX_CHARS = 4096;
+      var RENDER360_LOG_MAX_CHARS = RENDER360_OUTPUT_MAX_CHARS;
 
       function render360AppendOutput(text) {
-        var line = String(text) + '\n';
-        if (line.length > RENDER360_LOG_MAX_CHARS) line = line.slice(-RENDER360_LOG_MAX_CHARS);
-        render360LogChunks.push(line);
-        render360LogChars += line.length;
-
-        while (render360LogChars > RENDER360_LOG_MAX_CHARS && render360LogHead < render360LogChunks.length - 1) {
-          render360LogChars -= render360LogChunks[render360LogHead].length;
-          render360LogChunks[render360LogHead] = '';
-          render360LogHead++;
-        }
-        if (render360LogHead > 256) {
-          render360LogChunks = render360LogChunks.slice(render360LogHead);
-          render360LogHead = 0;
-        }
+        var line = String(text || '');
+        if (line.length > RENDER360_OUTPUT_MAX_CHARS) line = line.slice(-RENDER360_OUTPUT_MAX_CHARS);
+        render360LatestOutput = line;
       }
 
       function render360DiagnosticText() {
-        var log = render360LogChunks.slice(render360LogHead).join('');
-        if (log.length > RENDER360_LOG_MAX_CHARS) log = log.slice(-RENDER360_LOG_MAX_CHARS);
         var lines = [
           'Render360 Portal diagnostics',
           'captured=' + new Date().toISOString(),
@@ -111,8 +92,8 @@
           'OffscreenCanvas=' + typeof OffscreenCanvas,
           'WebGL2=' + String(!!document.createElement('canvas').getContext('webgl2')),
           '',
-          '--- buffered runtime log (latest 64 KiB) ---',
-          log
+          '--- latest runtime event only ---',
+          render360LatestOutput || '<none>'
         ];
         try {
           var crashState = localStorage.getItem('render360-ios-crash-state-v2');
@@ -139,7 +120,7 @@
             document.execCommand('copy');
             temporary.remove();
           }
-          if (diagnosticStatusElement) diagnosticStatusElement.textContent = 'Copied ' + Math.ceil(text.length / 1024) + ' KiB';
+          if (diagnosticStatusElement) diagnosticStatusElement.textContent = 'Copied latest diagnostic state';
           return true;
         } catch (error) {
           if (diagnosticStatusElement) diagnosticStatusElement.textContent = 'Copy failed: ' + String(error && error.message ? error.message : error);
@@ -149,6 +130,7 @@
 
       function render360Report(kind, message, error) {
         var stack = error && error.stack ? '\n' + error.stack : '';
+        if (stack.length > RENDER360_OUTPUT_MAX_CHARS) stack = stack.slice(-RENDER360_OUTPUT_MAX_CHARS);
         var concise = '[Render360 ' + kind + '] ' + String(message || '<no message>');
         var detail = concise + stack;
         console.error(detail);
@@ -158,8 +140,8 @@
           localStorage.setItem('render360-ios-last-error-v1', JSON.stringify({
             at: Date.now(),
             kind: String(kind || 'error'),
-            message: String(message || '<no message>').slice(-4096),
-            stack: stack.slice(-8192)
+            message: String(message || '<no message>').slice(-2048),
+            stack: stack.slice(-4096)
           }));
         } catch (_) {}
         return detail;
