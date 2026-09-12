@@ -62,8 +62,14 @@ jobs:
           grep -q -- '-lworkerfs.js' emscripten/build.sh
           grep -q 'phase3-workerfs.js' emscripten/build.sh
           grep -q 'phase4-memory-profile.js' emscripten/build.sh
+          grep -q 'phase4-transition-mask.js' emscripten/build.sh
+          grep -q 'Render360Phase4_TransitionSignal' emscripten/build.sh
+          grep -q 'Host_Changelevel' emscripten/build.sh
           grep -q 'toResizableBuffer' emscripten/phase4-memory-profile.js
+          grep -q 'render360Phase4TransitionSignal' emscripten/phase4-transition-mask.js
+          grep -q 'APERTURE SCIENCE · TRANSIT' emscripten/phase4-transition-mask.js
           node --check emscripten/phase4-memory-profile.js
+          node --check emscripten/phase4-transition-mask.js
           echo "Phase 4 profile: initial=${RENDER360_INITIAL_MEMORY_MB} MiB max=${RENDER360_MAXIMUM_MEMORY_MB} MiB growable=${RENDER360_GROWABLE_ARRAYBUFFERS}"
 
       - name: Install Emscripten 6.0.6
@@ -94,7 +100,11 @@ jobs:
           grep -q '"growableArrayBuffers": 1' build/install/render360-phase4-profile.json
           grep -q "\"initialMemoryMiB\": ${RENDER360_INITIAL_MEMORY_MB}" build/install/render360-phase4-profile.json
           grep -q "\"maximumMemoryMiB\": ${RENDER360_MAXIMUM_MEMORY_MB}" build/install/render360-phase4-profile.json
+          grep -q '"currentMapOnly": true' build/install/render360-phase4-profile.json
+          grep -q '"transitionMask": "css-elevator-host-changelevel"' build/install/render360-phase4-profile.json
+          grep -q '"transitionMapPrefetch": false' build/install/render360-phase4-profile.json
           grep -a -q 'render360Phase4MemoryProfile' build/install/hl2_launcher.js
+          grep -a -q 'render360Phase4TransitionSignal' build/install/hl2_launcher.js
           grep -a -q 'render360-direct-vpk' build/install/hl2_launcher.js
           ls -lh build/install/hl2_launcher.{html,js,wasm,data}
           cat build/install/render360-phase4-profile.json
