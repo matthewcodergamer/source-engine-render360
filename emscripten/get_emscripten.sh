@@ -16,6 +16,64 @@ source ./emsdk_env.sh
 emcc -v
 popd
 
+# 6.0.6 already contains upstream's cross-thread HTML5 event-payload lifetime
+# fix, but its callback bridge still aborts the whole program if a late DOM event
+# targets a pthread mailbox that has already closed. On mobile Safari that can
+# turn a secondary stale input event into the visible crash and hide the earlier
+# worker failure. Treat browser input as best-effort: if the tiny wrapper cannot
+# be allocated, or the target mailbox is gone, drop that one event and free it.
+HTML5_CALLBACK=emsdk/upstream/emscripten/system/lib/html5/callback.c
+python3 - "$HTML5_CALLBACK" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+marker = 'Render360 mobile: stale cross-thread HTML5 callbacks are non-fatal'
+if marker not in text:
+    old_alloc = '''  callback_args_t* arg = malloc(sizeof(callback_args_t) + event_data_size);
+  arg->callback = f;
+'''
+    new_alloc = '''  callback_args_t* arg = malloc(sizeof(callback_args_t) + event_data_size);
+  if (!arg) {
+    // Render360 mobile: stale cross-thread HTML5 callbacks are non-fatal.
+    // Input is best-effort under memory pressure; dropping one event is safer
+    // than dereferencing a null wrapper and terminating the Source runtime.
+    return;
+  }
+  arg->callback = f;
+'''
+    if old_alloc not in text:
+        raise SystemExit('Render360 Phase 4: Emscripten callback allocation block moved')
+    text = text.replace(old_alloc, new_alloc, 1)
+
+    old_fail = '''  if (!emscripten_proxy_async(q, t, do_callback, arg)) {
+    assert(false && "emscripten_proxy_async failed");
+  }
+'''
+    new_fail = '''  if (!emscripten_proxy_async(q, t, do_callback, arg)) {
+    // A DOM event can race pthread teardown. The payload is owned by `arg` in
+    // 6.0.6, so free it and preserve the actual earlier runtime failure.
+    free(arg);
+    return;
+  }
+'''
+    if old_fail not in text:
+        raise SystemExit('Render360 Phase 4: Emscripten callback proxy failure block moved')
+    text = text.replace(old_fail, new_fail, 1)
+
+for required in (
+    marker,
+    'if (!arg) {',
+    'free(arg);',
+):
+    if required not in text:
+        raise SystemExit(f'Render360 Phase 4: hardened HTML5 callback missing marker: {required}')
+
+path.write_text(text)
+print('Render360 Phase 4: hardened cross-thread HTML5 callbacks for mobile Safari')
+PY
+
 # Patch and rebuild SDL2. Newer SDKs may update the SDL release directory name,
 # so locate the port source instead of hard-coding SDL-release-2.32.0.
 embuilder --pic build sdl2 sdl2-mt
