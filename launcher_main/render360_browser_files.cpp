@@ -2,9 +2,9 @@
 //
 // This code is linked into the MAIN_MODULE and exported for filesystem_stdio.so.
 // Source runs under PROXY_TO_PTHREAD, so these EM_JS calls execute on the calling
-// Source pthread.  Phase 3 transfers the user's File objects to that pthread;
-// FileReaderSync can therefore service synchronous Source/VPK reads without
-// copying the retail archives into MEMFS or the Wasm heap permanently.
+// Source pthread. Phase 3 mounts the user's File objects in that pthread through
+// WORKERFS; FileReaderSync can therefore service synchronous Source/VPK reads
+// without copying the retail archives into MEMFS or the Wasm heap permanently.
 
 #ifdef __EMSCRIPTEN__
 
@@ -14,16 +14,32 @@
 EM_JS(int, render360_browser_file_open_js, (const char *pathPtr), {
   try {
     if (typeof FileReaderSync === 'undefined') return -1;
-    var files = globalThis.__render360RetailFileMap;
-    if (!files || typeof files.get !== 'function') return -1;
     var path = UTF8ToString(pathPtr || 0)
       .replace(/\\/g, '/')
       .replace(/\/+/g, '/')
       .replace(/^\/+/, '')
       .replace(/(^|\/)\.\//g, '$1')
       .toLowerCase();
-    var file = files.get(path);
+
+    var file = null;
+    var files = globalThis.__render360RetailFileMap;
+    if (files && typeof files.get === 'function') file = files.get(path) || null;
+
+    // The Phase 3 handoff already mounted these File/Blob objects in this
+    // pthread's WORKERFS. Resolve the backing Blob directly instead of entering
+    // libc/legacy JS FS, whose pthread syscalls are normally proxied to the
+    // browser main thread and cannot use FileReaderSync.
+    if (!file && typeof FS !== 'undefined') {
+      try {
+        var resolved = FS.lookupPath('/render360-retail/' + path, { follow: true });
+        var node = resolved && resolved.node;
+        if (node && node.contents && typeof node.contents.slice === 'function') {
+          file = node.contents;
+        }
+      } catch (_) {}
+    }
     if (!file) return -1;
+
     var handles = globalThis.__render360RetailHandles;
     if (!handles) handles = globalThis.__render360RetailHandles = new Map();
     var next = (globalThis.__render360RetailNextHandle | 0) || 1;
@@ -79,15 +95,25 @@ EM_JS(void, render360_browser_file_close_js, (int handle), {
 
 EM_JS(double, render360_browser_file_stat_js, (const char *pathPtr), {
   try {
-    var files = globalThis.__render360RetailFileMap;
-    if (!files || typeof files.get !== 'function') return -1;
     var path = UTF8ToString(pathPtr || 0)
       .replace(/\\/g, '/')
       .replace(/\/+/g, '/')
       .replace(/^\/+/, '')
       .replace(/(^|\/)\.\//g, '$1')
       .toLowerCase();
-    var file = files.get(path);
+
+    var file = null;
+    var files = globalThis.__render360RetailFileMap;
+    if (files && typeof files.get === 'function') file = files.get(path) || null;
+    if (!file && typeof FS !== 'undefined') {
+      try {
+        var resolved = FS.lookupPath('/render360-retail/' + path, { follow: true });
+        var node = resolved && resolved.node;
+        if (node && node.contents && typeof node.contents.slice === 'function') {
+          file = node.contents;
+        }
+      } catch (_) {}
+    }
     return file ? Number(file.size || 0) : -1;
   } catch (_) {
     return -1;
