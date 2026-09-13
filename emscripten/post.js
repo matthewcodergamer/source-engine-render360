@@ -135,7 +135,7 @@
 	Module.preRun = Module.preRun || []
 	Module.preRun.push(() => {
 		if(held || finished) return
-		addRunDependency(DEPENDENDENCY)
+		addRunDependency(DEPENDENCY)
 		held = true
 		try {
 			window.parent.postMessage({ type: REQUEST_TYPE, token }, location.origin)
