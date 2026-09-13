@@ -119,10 +119,14 @@ if marker not in text:
 '''
     base_replacement = '''\tif ( IsPC() )
 \t{
-\t\tchar const *pOverrideDir = CommandLine()->CheckParm( "-basedir" );
-\t\tif ( pOverrideDir )
+\t\t// CheckParm() returns the parameter token itself ("-basedir"). The
+\t\t// actual value is returned through its optional out-parameter. Treating
+\t\t// the return value as the directory made Render360 chdir to "-basedir"
+\t\t// and caused PreInit to miss /portal/gameinfo.txt.
+\t\tconst char *pOverrideDir = NULL;
+\t\tif ( CommandLine()->CheckParm( "-basedir", &pOverrideDir ) && pOverrideDir && pOverrideDir[0] )
 \t\t{
-\t\t\tstrcpy( g_szBasedir, pOverrideDir );
+\t\t\tQ_strncpy( g_szBasedir, pOverrideDir, sizeof( g_szBasedir ) );
 \t\t}
 \t}
 
@@ -134,6 +138,10 @@ if marker not in text:
 \t{
 \t\tQ_strncpy( g_szBasedir, "/", sizeof( g_szBasedir ) );
 \t\tMsg( "[Render360 startup] basedir-fallback:/\\n" );
+\t}
+\telse
+\t{
+\t\tMsg( "[Render360 startup] basedir-override:%s\\n", g_szBasedir );
 \t}
 #endif
 
@@ -305,6 +313,8 @@ int CSourceAppSystemGroup::Main()
 
 for required in (
     marker,
+    'CommandLine()->CheckParm( "-basedir", &pOverrideDir )',
+    '[Render360 startup] basedir-override:',
     '[Render360 startup] create-start',
     '[Render360 startup] preinit-start',
     '[Render360 startup] gameinfo-ready:',
