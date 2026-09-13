@@ -100,6 +100,194 @@ path.write_text(updated)
 print('Render360 Portal: patched Sys_LoadModule optional browser-module handling')
 PY
 
+# Add hierarchical startup diagnostics after get_emscripten.sh has applied the
+# base Render360 launcher checkpoints. The outer Steam wrapper can report NONE
+# even when its Source child or the engine's mod app-system group returned -1.
+python3 - <<'PY'
+from pathlib import Path
+
+launcher = Path('launcher/launcher.cpp')
+launcher_text = launcher.read_text()
+old_launcher = '''#ifdef __EMSCRIPTEN__
+\t\tWarning( "[Render360 startup] steam-run-return:%d stage:%d\\n", nRetval, (int)steamApplication.GetErrorStage() );
+#endif
+'''
+new_launcher = '''#ifdef __EMSCRIPTEN__
+\t\tWarning( "[Render360 startup] steam-return:%d steam-stage:%d source-stage:%d\\n",
+\t\t\tnRetval,
+\t\t\t(int)steamApplication.GetErrorStage(),
+\t\t\t(int)sourceSystems.GetErrorStage() );
+#endif
+'''
+if old_launcher not in launcher_text:
+    raise SystemExit('Render360 nested diagnostics: outer Steam checkpoint anchor moved')
+launcher_text = launcher_text.replace(old_launcher, new_launcher, 1)
+for required in ('steam-return:%d', 'steam-stage:%d', 'source-stage:%d'):
+    if required not in launcher_text:
+        raise SystemExit(f'Render360 nested diagnostics: launcher marker missing: {required}')
+launcher.write_text(launcher_text)
+
+engine = Path('engine/sys_dll2.cpp')
+engine_text = engine.read_text()
+marker = 'Render360 startup: nested mod app-system diagnostics'
+if marker not in engine_text:
+    create_anchor = '''bool CModAppSystemGroup::Create()
+{
+#ifndef SWDS
+'''
+    create_replacement = '''bool CModAppSystemGroup::Create()
+{
+#ifdef __EMSCRIPTEN__
+\t// Render360 startup: nested mod app-system diagnostics.
+\tMsg( "[Render360 startup] mod-create-start\\n" );
+#endif
+#ifndef SWDS
+'''
+    if create_anchor not in engine_text:
+        raise SystemExit('Render360 nested diagnostics: CModAppSystemGroup::Create anchor moved')
+    engine_text = engine_text.replace(create_anchor, create_replacement, 1)
+
+    client_anchor = '''#ifndef SWDS
+\tif ( !IsServerOnly() )
+{
+\t\tif ( !ClientDLL_Load() )
+\treturn false;
+}
+#endif 
+'''
+    client_replacement = '''#ifndef SWDS
+\tif ( !IsServerOnly() )
+\t{
+#ifdef __EMSCRIPTEN__
+\t\tMsg( "[Render360 startup] mod-create-client-load-start\\n" );
+#endif
+\t\tif ( !ClientDLL_Load() )
+\t\t{
+#ifdef __EMSCRIPTEN__
+\t\t\tWarning( "[Render360 startup] mod-create-fail:ClientDLL_Load\\n" );
+#endif
+\t\t\treturn false;
+\t\t}
+#ifdef __EMSCRIPTEN__
+\t\tMsg( "[Render360 startup] mod-create-client-load-ready\\n" );
+#endif
+\t}
+#endif 
+'''
+    if client_anchor not in engine_text:
+        raise SystemExit('Render360 nested diagnostics: ClientDLL_Load anchor moved')
+    engine_text = engine_text.replace(client_anchor, client_replacement, 1)
+
+    server_anchor = '''\tif ( !ServerDLL_Load( IsServerOnly() ) )
+\t\treturn false;
+'''
+    server_replacement = '''#ifdef __EMSCRIPTEN__
+\tMsg( "[Render360 startup] mod-create-server-load-start\\n" );
+#endif
+\tif ( !ServerDLL_Load( IsServerOnly() ) )
+\t{
+#ifdef __EMSCRIPTEN__
+\t\tWarning( "[Render360 startup] mod-create-fail:ServerDLL_Load\\n" );
+#endif
+\t\treturn false;
+\t}
+#ifdef __EMSCRIPTEN__
+\tMsg( "[Render360 startup] mod-create-server-load-ready\\n" );
+#endif
+'''
+    if server_anchor not in engine_text:
+        raise SystemExit('Render360 nested diagnostics: ServerDLL_Load anchor moved')
+    engine_text = engine_text.replace(server_anchor, server_replacement, 1)
+
+    systems_anchor = '''\tif ( !AddSystems( systems.Base() ) ) 
+\t\treturn false;
+'''
+    systems_replacement = '''\tif ( !AddSystems( systems.Base() ) )
+\t{
+#ifdef __EMSCRIPTEN__
+\t\tWarning( "[Render360 startup] mod-create-fail:AddSystems\\n" );
+#endif
+\t\treturn false;
+\t}
+#ifdef __EMSCRIPTEN__
+\tMsg( "[Render360 startup] mod-create-appsystems-ready\\n" );
+#endif
+'''
+    if systems_anchor not in engine_text:
+        raise SystemExit('Render360 nested diagnostics: mod AddSystems anchor moved')
+    engine_text = engine_text.replace(systems_anchor, systems_replacement, 1)
+
+    tool_anchor = '''\t\tif ( !AddSystem( toolFrameworkModule, VTOOLFRAMEWORK_INTERFACE_VERSION ) )
+\t\t\treturn false;
+'''
+    tool_replacement = '''\t\tif ( !AddSystem( toolFrameworkModule, VTOOLFRAMEWORK_INTERFACE_VERSION ) )
+\t\t{
+#ifdef __EMSCRIPTEN__
+\t\t\tWarning( "[Render360 startup] mod-create-fail:toolframework\\n" );
+#endif
+\t\t\treturn false;
+\t\t}
+'''
+    if tool_anchor not in engine_text:
+        raise SystemExit('Render360 nested diagnostics: toolframework anchor moved')
+    engine_text = engine_text.replace(tool_anchor, tool_replacement, 1)
+
+    create_ready_anchor = '''#endif
+
+\treturn true;
+}
+
+//-----------------------------------------------------------------------------
+// Purpose: Fixme, we might need to verify if the interface names differ for the client versus the server
+'''
+    create_ready_replacement = '''#endif
+
+#ifdef __EMSCRIPTEN__
+\tMsg( "[Render360 startup] mod-create-ready\\n" );
+#endif
+\treturn true;
+}
+
+//-----------------------------------------------------------------------------
+// Purpose: Fixme, we might need to verify if the interface names differ for the client versus the server
+'''
+    if create_ready_anchor not in engine_text:
+        raise SystemExit('Render360 nested diagnostics: mod Create ready anchor moved')
+    engine_text = engine_text.replace(create_ready_anchor, create_ready_replacement, 1)
+
+    run_anchor = '''\t\tnRunResult = modAppSystemGroup.Run();
+
+\t\tg_AppSystemFactory = NULL;
+'''
+    run_replacement = '''\t\tnRunResult = modAppSystemGroup.Run();
+#ifdef __EMSCRIPTEN__
+\t\tWarning( "[Render360 startup] mod-return:%d mod-stage:%d\\n",
+\t\t\tnRunResult,
+\t\t\t(int)modAppSystemGroup.GetErrorStage() );
+#endif
+
+\t\tg_AppSystemFactory = NULL;
+'''
+    if run_anchor not in engine_text:
+        raise SystemExit('Render360 nested diagnostics: mod Run anchor moved')
+    engine_text = engine_text.replace(run_anchor, run_replacement, 1)
+
+for required in (
+    marker,
+    '[Render360 startup] mod-create-client-load-start',
+    '[Render360 startup] mod-create-fail:ClientDLL_Load',
+    '[Render360 startup] mod-create-server-load-start',
+    '[Render360 startup] mod-create-fail:ServerDLL_Load',
+    '[Render360 startup] mod-create-fail:AddSystems',
+    '[Render360 startup] mod-create-ready',
+    '[Render360 startup] mod-return:%d mod-stage:%d',
+):
+    if required not in engine_text:
+        raise SystemExit(f'Render360 nested diagnostics: engine marker missing: {required}')
+engine.write_text(engine_text)
+print('Render360 Portal: added nested Steam/Source/mod startup diagnostics')
+PY
+
 python3 waf configure -T $buildtype --notests -4 --togles --emscripten \
 	--disable-warns --build-games=portal --prefix=build/install
 python3 waf install $@

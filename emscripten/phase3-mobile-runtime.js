@@ -25,9 +25,169 @@
   const isWindow = typeof window !== 'undefined' && typeof document !== 'undefined'
   if(!isWindow) return
 
-  const STARTUP_KEY = 'render360-startup-checkpoint-v1'
+  const STARTUP_KEY = 'render360-startup-checkpoint-v2'
+  const STARTUP_DEBUG_KEY = 'render360-startup-debug-v1'
+  const STARTUP_TRACE_LIMIT = 24
+  const APP_SYSTEM_STAGE_NAMES = [
+    'CREATION',
+    'CONNECTION',
+    'PREINITIALIZATION',
+    'INITIALIZATION',
+    'SHUTDOWN',
+    'POSTSHUTDOWN',
+    'DISCONNECTION',
+    'DESTRUCTION',
+    'NONE'
+  ]
+
   let lastStartupCheckpoint = ''
   let viewportFullscreen = false
+
+  function navigationType() {
+    try {
+      return performance.getEntriesByType?.('navigation')?.[0]?.type || ''
+    } catch(_) {
+      return ''
+    }
+  }
+
+  function newStartupDebugState() {
+    return {
+      version: 1,
+      startedAt: Date.now(),
+      updatedAt: Date.now(),
+      navigationType: navigationType(),
+      latest: '',
+      deepestFailure: null,
+      failureHint: null,
+      stages: {
+        steam: null,
+        source: null,
+        mod: null
+      },
+      trace: []
+    }
+  }
+
+  let startupDebug = newStartupDebugState()
+  if(startupDebug.navigationType === 'reload') {
+    try {
+      const previous = JSON.parse(localStorage.getItem(STARTUP_DEBUG_KEY) || 'null')
+      if(previous && Array.isArray(previous.trace)) {
+        startupDebug = {
+          ...newStartupDebugState(),
+          ...previous,
+          navigationType: 'reload',
+          updatedAt: Date.now(),
+          trace: previous.trace.slice(-STARTUP_TRACE_LIMIT)
+        }
+        lastStartupCheckpoint = String(previous.latest || '')
+      }
+    } catch(_) {}
+  } else {
+    try {
+      localStorage.removeItem(STARTUP_KEY)
+      localStorage.removeItem(STARTUP_DEBUG_KEY)
+    } catch(_) {}
+  }
+
+  function appSystemStageName(value) {
+    const stage = Number(value)
+    return Number.isInteger(stage) && stage >= 0 && stage < APP_SYSTEM_STAGE_NAMES.length
+      ? APP_SYSTEM_STAGE_NAMES[stage]
+      : `UNKNOWN_${String(value)}`
+  }
+
+  function failurePriority(group) {
+    if(group === 'mod') return 3
+    if(group === 'source') return 2
+    if(group === 'steam') return 1
+    return 0
+  }
+
+  function persistStartupDebug() {
+    startupDebug.updatedAt = Date.now()
+    try {
+      localStorage.setItem(STARTUP_KEY, JSON.stringify({
+        at: startupDebug.updatedAt,
+        line: lastStartupCheckpoint
+      }))
+      localStorage.setItem(STARTUP_DEBUG_KEY, JSON.stringify(startupDebug))
+    } catch(_) {}
+  }
+
+  function recordStage(checkpoint, group, value) {
+    const stage = Number(value)
+    if(!Number.isInteger(stage)) return
+
+    startupDebug.stages[group] = {
+      value: stage,
+      name: appSystemStageName(stage),
+      at: Date.now()
+    }
+
+    // NONE (8) explicitly means this wrapper did not fail startup. Never allow
+    // an outer NONE to overwrite a real failure from a deeper app-system group.
+    if(stage === 8) return
+
+    const returnMatch = checkpoint.match(new RegExp(`(?:${group}|engine)-return:(-?\\d+)`, 'i'))
+    const candidate = {
+      group,
+      stage,
+      stageName: appSystemStageName(stage),
+      returnCode: returnMatch ? Number(returnMatch[1]) : null,
+      checkpoint: checkpoint.slice(0, 512),
+      at: Date.now()
+    }
+    const current = startupDebug.deepestFailure
+    if(!current || failurePriority(group) >= failurePriority(current.group)) {
+      startupDebug.deepestFailure = candidate
+    }
+  }
+
+  function recordStartupCheckpoint(checkpoint, fullLine) {
+    const clean = String(checkpoint || '').trim().slice(0, 512)
+    if(!clean) return
+
+    const now = Date.now()
+    startupDebug.latest = String(fullLine || clean).slice(-512)
+    lastStartupCheckpoint = startupDebug.latest
+
+    const lastTrace = startupDebug.trace[startupDebug.trace.length - 1]
+    if(lastTrace && lastTrace.checkpoint === clean) {
+      lastTrace.at = now
+      lastTrace.line = startupDebug.latest
+    } else {
+      startupDebug.trace.push({ at: now, checkpoint: clean, line: startupDebug.latest })
+      if(startupDebug.trace.length > STARTUP_TRACE_LIMIT) {
+        startupDebug.trace.splice(0, startupDebug.trace.length - STARTUP_TRACE_LIMIT)
+      }
+    }
+
+    for(const match of clean.matchAll(/\b(steam|source|mod)-stage:(-?\d+)/gi)) {
+      recordStage(clean, match[1].toLowerCase(), match[2])
+    }
+
+    if(/(?:^|[-:])fail(?:ure)?[:=-]/i.test(clean) || /(?:ClientDLL_Load|ServerDLL_Load).*fail/i.test(clean)) {
+      startupDebug.failureHint = {
+        checkpoint: clean,
+        at: now
+      }
+    }
+
+    persistStartupDebug()
+
+    try {
+      const deepest = startupDebug.deepestFailure
+      if(deepest) {
+        globalThis.render360SetPhase?.(
+          `startup-failure:${deepest.group}:${deepest.stageName}:${deepest.checkpoint.slice(0, 96)}`
+        )
+      } else {
+        globalThis.render360SetPhase?.(`startup:${clean.slice(0, 160)}`)
+      }
+    } catch(_) {}
+  }
 
   function rememberStartup(text) {
     const line = String(text || '').trim()
@@ -37,15 +197,8 @@
       /(?:filesystem|gameinfo\.txt|engine error|unable to|failed to mount|startup failed)/i.test(line)
     if(!meaningful) return
 
-    lastStartupCheckpoint = line.slice(-2048)
-    try {
-      localStorage.setItem(STARTUP_KEY, JSON.stringify({ at: Date.now(), line: lastStartupCheckpoint }))
-    } catch(_) {}
-
     const match = line.match(/\[Render360 startup\]\s*(.+)$/i)
-    if(match) {
-      try { globalThis.render360SetPhase?.(`startup:${match[1].slice(0, 160)}`) } catch(_) {}
-    }
+    recordStartupCheckpoint(match ? match[1] : line, line)
   }
 
   const oldPrint = typeof Module.print === 'function' ? Module.print.bind(Module) : console.log.bind(console)
@@ -59,22 +212,34 @@
     oldPrintErr(...args)
   }
 
-  // Preserve one useful startup checkpoint in Copy diagnostics without growing
-  // a history/log. Emscripten's final keepRuntimeAlive message otherwise replaces
-  // the line that explains why Source returned to JS.
+  // Copy diagnostics keeps the latest general runtime event, but now also adds a
+  // bounded startup trace and the deepest non-NONE app-system failure. This is
+  // deliberately small enough for iPhone Safari/localStorage while preserving
+  // the evidence needed after an outer wrapper returns -1.
   const oldDiagnosticText = globalThis.render360DiagnosticText
   if(typeof oldDiagnosticText === 'function') {
     globalThis.render360DiagnosticText = () => {
       let checkpoint = lastStartupCheckpoint
-      if(!checkpoint) {
+      let debug = startupDebug
+      if(!checkpoint || !debug?.trace?.length) {
         try {
-          checkpoint = JSON.parse(localStorage.getItem(STARTUP_KEY) || 'null')?.line || ''
+          checkpoint = checkpoint || JSON.parse(localStorage.getItem(STARTUP_KEY) || 'null')?.line || ''
+          debug = JSON.parse(localStorage.getItem(STARTUP_DEBUG_KEY) || 'null') || debug
         } catch(_) {}
       }
       const base = oldDiagnosticText()
-      return checkpoint ? `${base}\nlastStartupCheckpoint=${checkpoint}` : base
+      const additions = []
+      if(checkpoint) additions.push(`lastStartupCheckpoint=${checkpoint}`)
+      if(debug) additions.push(`startupDebug=${JSON.stringify(debug)}`)
+      return additions.length ? `${base}\n${additions.join('\n')}` : base
     }
   }
+
+  try {
+    if(typeof diagnosticStatusElement !== 'undefined' && diagnosticStatusElement) {
+      diagnosticStatusElement.textContent = 'Latest runtime event + bounded startup trace'
+    }
+  } catch(_) {}
 
   function fullscreenButton() {
     try {
