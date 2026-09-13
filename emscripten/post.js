@@ -29,6 +29,129 @@
 	})
 })();
 
+// Phase 3 keeps retail VPK payloads browser-backed in WORKERFS, but Source's
+// startup filesystem calls can be proxied through Emscripten's main-thread JS
+// filesystem. A WORKERFS mount local to pool workers therefore is not enough for
+// PREINITIALIZATION: filesystem_stdio must be able to open /portal/gameinfo.txt
+// before the engine has entered its normal VPK read path.
+//
+// Copy ONLY tiny bootstrap metadata into the shared/main-thread MEMFS. VPKs,
+// maps, textures, audio and every large retail payload remain File-backed, so
+// this fixes startup visibility without reintroducing the old ~221 MiB preload.
+;(() => {
+	'use strict'
+
+	if(typeof window === 'undefined' || typeof document === 'undefined') return
+	let frame = null
+	try { frame = window.frameElement } catch(_) {}
+	if(!frame) return
+	try {
+		if(!new URLSearchParams(location.search).has('render360Phase3')) return
+	} catch(_) { return }
+
+	const FILES_TYPE = 'render360-retail-files'
+	const REQUEST_TYPE = 'render360-retail-request'
+	const DEPENDENCY = 'render360-phase3-startup-metadata'
+	const TIMEOUT_MS = 20000
+	const token = `phase3-startup-${Date.now()}-${Math.random().toString(16).slice(2)}`
+	let held = false
+	let finished = false
+	let timer = 0
+
+	function normalize(value) {
+		return String(value || '').replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+/g, '/')
+	}
+
+	function isStartupMetadata(path) {
+		return /^(?:portal|hl2|platform)\/(?:gameinfo\.txt|steam\.inf|game\.inf)$/i.test(path)
+	}
+
+	function release() {
+		if(!held) return
+		held = false
+		removeRunDependency(DEPENDENCY)
+	}
+
+	function fail(error) {
+		clearTimeout(timer)
+		const detail = error && error.message ? error.message : String(error)
+		const message = `[Render360 Phase 3] startup metadata staging failed: ${detail}`
+		try { globalThis.render360SetPhase?.('phase3-startup-metadata-failed') } catch(_) {}
+		Module.printErr?.(message)
+		if(typeof render360Report === 'function') {
+			try { render360Report('Phase 3 startup metadata failure', detail, error) } catch(_) {}
+		}
+		// Fail closed. Releasing the dependency here would let Source race into the
+		// same misleading PREINITIALIZATION/gameinfo failure we are preventing.
+		if(typeof abort === 'function') {
+			abort(message)
+			return
+		}
+		throw error instanceof Error ? error : new Error(message)
+	}
+
+	async function stage(files) {
+		let count = 0
+		let bytes = 0
+		let hasPortalGameInfo = false
+		for(const item of Array.isArray(files) ? files : []) {
+			const path = normalize(item && item.path)
+			const file = item && item.file
+			if(!isStartupMetadata(path) || !file || typeof file.arrayBuffer !== 'function') continue
+
+			const fullPath = '/' + path
+			const slash = fullPath.lastIndexOf('/')
+			if(slash > 0) FS.mkdirTree(fullPath.slice(0, slash))
+			const data = new Uint8Array(await file.arrayBuffer())
+			FS.writeFile(fullPath, data)
+			bytes += data.byteLength
+			count++
+			if(path.toLowerCase() === 'portal/gameinfo.txt') hasPortalGameInfo = true
+		}
+
+		if(!hasPortalGameInfo) {
+			throw new Error('portal/gameinfo.txt was not provided by the selected Portal folder')
+		}
+		const stat = FS.stat('/portal/gameinfo.txt')
+		if(!stat || Number(stat.size || 0) <= 0) {
+			throw new Error('/portal/gameinfo.txt is empty or not visible in shared MEMFS')
+		}
+
+		Module.render360Phase3StartupMemfsBytes = bytes
+		Module.render360Phase3StartupMemfsFiles = count
+		Module.print?.(`[Render360 Phase 3] staged ${count} startup metadata files (${bytes} bytes) into shared MEMFS; VPK payload remains browser-backed`)
+		try { globalThis.render360SetPhase?.('phase3-startup-metadata-ready') } catch(_) {}
+	}
+
+	window.addEventListener('message', event => {
+		if(finished || event.origin !== location.origin || event.source !== window.parent) return
+		const data = event && event.data
+		if(!data || data.type !== FILES_TYPE || data.token !== token) return
+		finished = true
+		clearTimeout(timer)
+		stage(data.files).then(release, fail)
+	})
+
+	Module.preRun = Module.preRun || []
+	Module.preRun.push(() => {
+		if(held || finished) return
+		addRunDependency(DEPENDENDENCY)
+		held = true
+		try {
+			window.parent.postMessage({ type: REQUEST_TYPE, token }, location.origin)
+		} catch(error) {
+			finished = true
+			fail(error)
+			return
+		}
+		timer = setTimeout(() => {
+			if(finished) return
+			finished = true
+			fail(new Error('timed out waiting for startup metadata File handles'))
+		}, TIMEOUT_MS)
+	})
+})();
+
 // Diagnostic-only addition for PROXY_TO_PTHREAD / worker-side failures.
 // Keep this WorkerGlobalScope-safe: hl2_launcher.js is imported by pthreads and
 // there is deliberately no `window` object in those workers.
