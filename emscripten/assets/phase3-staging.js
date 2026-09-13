@@ -99,6 +99,7 @@
       }
       localStorage.removeItem('render360-ios-last-error-v1');
       localStorage.removeItem('render360-missing-shader-v1');
+      localStorage.removeItem('render360-startup-checkpoint-v1');
     } catch(_) {}
   }
 
@@ -149,7 +150,12 @@
     const frame = document.createElement('iframe');
     frame.id = 'render360Phase3Frame';
     frame.title = 'Render360 Portal Phase 3 runtime';
-    frame.allow = 'fullscreen; gamepad';
+    // Use both the modern Permissions Policy and legacy iframe fullscreen flags.
+    // Safari/iOS implementations have shipped both code paths over time.
+    frame.allow = 'fullscreen; autoplay; gamepad';
+    frame.allowFullscreen = true;
+    frame.setAttribute('allowfullscreen', '');
+    frame.setAttribute('webkitallowfullscreen', '');
     frame.style.cssText = 'border:0;width:100%;flex:1 1 auto;min-height:0;background:#111;';
     frame.src = './hl2_launcher.html?render360Phase3=' + Date.now();
 
