@@ -32,6 +32,11 @@ def build(bld):
 	install_path = bld.env.BINDIR
 
 	if bld.env.DEST_OS == 'wasm':
+		# Export a tiny synchronous FileReaderSync bridge from the MAIN_MODULE.
+		# filesystem_stdio.so uses it to read browser-backed Portal VPK ranges
+		# directly on the Source pthread instead of routing retail bytes through
+		# Emscripten's main-thread JS filesystem/MEMFS.
+		source += ['render360_browser_files.cpp']
 		bld.stlib(
 			source   = source,
 			target   = PROJECT_NAME,
