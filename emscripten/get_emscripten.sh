@@ -199,3 +199,249 @@ for required in (
 path.write_text(text)
 print('Render360 Phase 4: added refcount-safe unused-material cleanup at level shutdown')
 PY
+
+# Keep the Phase 4 runtime on the same deterministic browser root as the Phase
+# 3 deployment. launcher.cpp cannot infer a native executable directory in
+# WebAssembly, so explicitly repair the fallback and add exact startup markers.
+python3 - <<'PY'
+from pathlib import Path
+
+path = Path('launcher/launcher.cpp')
+text = path.read_text()
+marker = 'Render360 startup: deterministic WebAssembly base directory'
+if marker not in text:
+    base_anchor = '''\tif ( IsPC() )
+\t{
+\t\tchar const *pOverrideDir = CommandLine()->CheckParm( "-basedir" );
+\t\tif ( pOverrideDir )
+\t\t{
+\t\t\tstrcpy( g_szBasedir, pOverrideDir );
+\t\t}
+\t}
+
+#ifdef WIN32
+'''
+    base_replacement = '''\tif ( IsPC() )
+\t{
+\t\tchar const *pOverrideDir = CommandLine()->CheckParm( "-basedir" );
+\t\tif ( pOverrideDir )
+\t\t{
+\t\t\tstrcpy( g_szBasedir, pOverrideDir );
+\t\t}
+\t}
+
+#ifdef __EMSCRIPTEN__
+\t// Render360 startup: deterministic WebAssembly base directory.
+\tif ( !g_szBasedir[0] )
+\t{
+\t\tQ_strncpy( g_szBasedir, "/", sizeof( g_szBasedir ) );
+\t\tMsg( "[Render360 startup] basedir-fallback:/\\n" );
+\t}
+#endif
+
+#ifdef WIN32
+'''
+    if base_anchor not in text:
+        raise SystemExit('Render360 Phase 4 startup: UTIL_ComputeBaseDir anchor moved')
+    text = text.replace(base_anchor, base_replacement, 1)
+
+    create_anchor = '''bool CSourceAppSystemGroup::Create()
+{
+\tIFileSystem *pFileSystem = (IFileSystem*)FindSystem( FILESYSTEM_INTERFACE_VERSION );
+'''
+    create_replacement = '''bool CSourceAppSystemGroup::Create()
+{
+#ifdef __EMSCRIPTEN__
+\tMsg( "[Render360 startup] create-start\\n" );
+#endif
+\tIFileSystem *pFileSystem = (IFileSystem*)FindSystem( FILESYSTEM_INTERFACE_VERSION );
+'''
+    if create_anchor not in text:
+        raise SystemExit('Render360 Phase 4 startup: Create anchor moved')
+    text = text.replace(create_anchor, create_replacement, 1)
+
+    addsystems_old = '''\tif ( !AddSystems( appSystems ) ) 
+\t\treturn false;
+'''
+    addsystems_new = '''\tif ( !AddSystems( appSystems ) )
+\t{
+#ifdef __EMSCRIPTEN__
+\t\tWarning( "[Render360 startup] create-fail:AddSystems\\n" );
+#endif
+\t\treturn false;
+\t}
+'''
+    if addsystems_old not in text:
+        raise SystemExit('Render360 Phase 4 startup: AddSystems anchor moved')
+    text = text.replace(addsystems_old, addsystems_new, 1)
+
+    shader_anchor = '''\tpMaterialSystem->SetShaderAPI( pDLLName );
+
+\tdouble elapsed = Plat_FloatTime() - st;
+'''
+    shader_replacement = '''\tpMaterialSystem->SetShaderAPI( pDLLName );
+#ifdef __EMSCRIPTEN__
+\tMsg( "[Render360 startup] create-ready:shaderapi=%s\\n", pDLLName );
+#endif
+
+\tdouble elapsed = Plat_FloatTime() - st;
+'''
+    if shader_anchor not in text:
+        raise SystemExit('Render360 Phase 4 startup: shader API anchor moved')
+    text = text.replace(shader_anchor, shader_replacement, 1)
+
+    preinit_anchor = '''bool CSourceAppSystemGroup::PreInit()
+{
+\tif ( !CommandLine()->FindParm( "-nolog" ) )
+'''
+    preinit_replacement = '''bool CSourceAppSystemGroup::PreInit()
+{
+#ifdef __EMSCRIPTEN__
+\tMsg( "[Render360 startup] preinit-start:basedir=%s game=%s\\n", GetBaseDirectory(), DetermineDefaultMod() );
+#endif
+\tif ( !CommandLine()->FindParm( "-nolog" ) )
+'''
+    if preinit_anchor not in text:
+        raise SystemExit('Render360 Phase 4 startup: PreInit anchor moved')
+    text = text.replace(preinit_anchor, preinit_replacement, 1)
+
+    interfaces_old = '''\tif ( !g_pFullFileSystem || !g_pMaterialSystem )
+\t\treturn false;
+'''
+    interfaces_new = '''\tif ( !g_pFullFileSystem || !g_pMaterialSystem )
+\t{
+#ifdef __EMSCRIPTEN__
+\t\tWarning( "[Render360 startup] preinit-fail:missing-filesystem-or-materialsystem\\n" );
+#endif
+\t\treturn false;
+\t}
+'''
+    if interfaces_old not in text:
+        raise SystemExit('Render360 Phase 4 startup: interface guard moved')
+    text = text.replace(interfaces_old, interfaces_new, 1)
+
+    env_old = '''\tif ( FileSystem_SetupSteamEnvironment( steamInfo ) != FS_OK )
+\t\treturn false;
+'''
+    env_new = '''\tif ( FileSystem_SetupSteamEnvironment( steamInfo ) != FS_OK )
+\t{
+#ifdef __EMSCRIPTEN__
+\t\tWarning( "[Render360 startup] preinit-fail:steam-environment:%s\\n", FileSystem_GetLastErrorString() );
+#endif
+\t\treturn false;
+\t}
+#ifdef __EMSCRIPTEN__
+\tMsg( "[Render360 startup] gameinfo-ready:%s\\n", steamInfo.m_GameInfoPath );
+#endif
+'''
+    if env_old not in text:
+        raise SystemExit('Render360 Phase 4 startup: Steam environment anchor moved')
+    text = text.replace(env_old, env_new, 1)
+
+    mount_old = '''\tif ( FileSystem_MountContent( fsInfo ) != FS_OK )
+\t\treturn false;
+'''
+    mount_new = '''\tif ( FileSystem_MountContent( fsInfo ) != FS_OK )
+\t{
+#ifdef __EMSCRIPTEN__
+\t\tWarning( "[Render360 startup] preinit-fail:mount-content:%s\\n", FileSystem_GetLastErrorString() );
+#endif
+\t\treturn false;
+\t}
+#ifdef __EMSCRIPTEN__
+\tMsg( "[Render360 startup] filesystem-mounted\\n" );
+#endif
+'''
+    if mount_old not in text:
+        raise SystemExit('Render360 Phase 4 startup: MountContent anchor moved')
+    text = text.replace(mount_old, mount_new, 1)
+
+    startupinfo_anchor = '''\tg_pEngineAPI->SetStartupInfo( info );
+
+\treturn true;
+}
+
+int CSourceAppSystemGroup::Main()
+{
+\treturn g_pEngineAPI->Run();
+}
+'''
+    startupinfo_replacement = '''\tg_pEngineAPI->SetStartupInfo( info );
+#ifdef __EMSCRIPTEN__
+\tMsg( "[Render360 startup] preinit-ready\\n" );
+#endif
+
+\treturn true;
+}
+
+int CSourceAppSystemGroup::Main()
+{
+#ifdef __EMSCRIPTEN__
+\tMsg( "[Render360 startup] engine-run-enter\\n" );
+#endif
+\tconst int nRender360Result = g_pEngineAPI->Run();
+#ifdef __EMSCRIPTEN__
+\tWarning( "[Render360 startup] engine-run-return:%d\\n", nRender360Result );
+#endif
+\treturn nRender360Result;
+}
+'''
+    if startupinfo_anchor not in text:
+        raise SystemExit('Render360 Phase 4 startup: StartupInfo/Main anchor moved')
+    text = text.replace(startupinfo_anchor, startupinfo_replacement, 1)
+
+    run_anchor = '''\t\tCSourceAppSystemGroup sourceSystems;
+\t\tCSteamApplication steamApplication( &sourceSystems );
+\t\tint nRetval = steamApplication.Run();
+'''
+    run_replacement = '''\t\tCSourceAppSystemGroup sourceSystems;
+\t\tCSteamApplication steamApplication( &sourceSystems );
+\t\tint nRetval = steamApplication.Run();
+#ifdef __EMSCRIPTEN__
+\t\tWarning( "[Render360 startup] steam-run-return:%d stage:%d\\n", nRetval, (int)steamApplication.GetErrorStage() );
+#endif
+'''
+    if run_anchor not in text:
+        raise SystemExit('Render360 Phase 4 startup: SteamApplication anchor moved')
+    text = text.replace(run_anchor, run_replacement, 1)
+
+for required in (
+    marker,
+    '[Render360 startup] create-start',
+    '[Render360 startup] preinit-start',
+    '[Render360 startup] gameinfo-ready:',
+    '[Render360 startup] filesystem-mounted',
+    '[Render360 startup] engine-run-enter',
+    '[Render360 startup] engine-run-return:',
+    '[Render360 startup] steam-run-return:',
+):
+    if required not in text:
+        raise SystemExit(f'Render360 Phase 4 startup patch missing marker: {required}')
+path.write_text(text)
+print('Render360 Phase 4: hardened and instrumented Source WebAssembly startup')
+PY
+
+# The mobile runtime wrapper is already tracked in this branch. Keep Phase 4's
+# build script change minimal and idempotent so the 320/256 MiB profile uses the
+# same explicit -basedir and fullscreen fallback as the deployed Phase 3 path.
+python3 - <<'PY'
+from pathlib import Path
+path = Path('emscripten/build.sh')
+text = path.read_text()
+marker = '--pre-js emscripten/phase3-mobile-runtime.js'
+if marker not in text:
+    old = '''\t--pre-js emscripten/pre.js \\
+\t--post-js emscripten/phase3-workerfs.js --post-js emscripten/post.js \\
+'''
+    new = '''\t--pre-js emscripten/pre.js \\
+\t--pre-js emscripten/phase3-mobile-runtime.js \\
+\t--post-js emscripten/phase3-workerfs.js --post-js emscripten/post.js \\
+'''
+    if old not in text:
+        raise SystemExit('Render360 Phase 4: build pre-js anchor moved')
+    text = text.replace(old, new, 1)
+if marker not in text:
+    raise SystemExit('Render360 Phase 4: mobile runtime wrapper was not wired')
+path.write_text(text)
+print('Render360 Phase 4: wired mobile startup/fullscreen pre-js')
+PY
