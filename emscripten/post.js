@@ -35,9 +35,11 @@
 // PREINITIALIZATION: filesystem_stdio must be able to open /portal/gameinfo.txt
 // before the engine has entered its normal VPK read path.
 //
-// Copy ONLY tiny bootstrap metadata into the shared/main-thread MEMFS. VPKs,
-// maps, textures, audio and every large retail payload remain File-backed, so
-// this fixes startup visibility without reintroducing the old ~221 MiB preload.
+// Copy ONLY tiny bootstrap metadata into the shared/main-thread MEMFS. For VPKs
+// create zero-byte namespace placeholders so Source can enumerate familiar file
+// names from the shared FS; filesystem_stdio intercepts the actual opens/stats
+// and reads the real File/Blob ranges on the Source pthread. No VPK payload,
+// maps, textures or audio are copied into MEMFS.
 ;(() => {
 	'use strict'
 
@@ -64,6 +66,15 @@
 
 	function isStartupMetadata(path) {
 		return /^(?:portal|hl2|platform)\/(?:gameinfo\.txt|steam\.inf|game\.inf)$/i.test(path)
+	}
+
+	function isRetailVpk(path) {
+		return /^(?:portal|hl2|platform)\/.+\.vpk$/i.test(path)
+	}
+
+	function ensureParent(fullPath) {
+		const slash = fullPath.lastIndexOf('/')
+		if(slash > 0) FS.mkdirTree(fullPath.slice(0, slash))
 	}
 
 	function release() {
@@ -93,20 +104,33 @@
 	async function stage(files) {
 		let count = 0
 		let bytes = 0
+		let vpkPlaceholders = 0
 		let hasPortalGameInfo = false
 		for(const item of Array.isArray(files) ? files : []) {
 			const path = normalize(item && item.path)
 			const file = item && item.file
-			if(!isStartupMetadata(path) || !file || typeof file.arrayBuffer !== 'function') continue
+			if(!path || !file) continue
 
 			const fullPath = '/' + path
-			const slash = fullPath.lastIndexOf('/')
-			if(slash > 0) FS.mkdirTree(fullPath.slice(0, slash))
-			const data = new Uint8Array(await file.arrayBuffer())
-			FS.writeFile(fullPath, data)
-			bytes += data.byteLength
-			count++
-			if(path.toLowerCase() === 'portal/gameinfo.txt') hasPortalGameInfo = true
+			if(isStartupMetadata(path) && typeof file.arrayBuffer === 'function') {
+				ensureParent(fullPath)
+				const data = new Uint8Array(await file.arrayBuffer())
+				FS.writeFile(fullPath, data)
+				bytes += data.byteLength
+				count++
+				if(path.toLowerCase() === 'portal/gameinfo.txt') hasPortalGameInfo = true
+				continue
+			}
+
+			if(isRetailVpk(path)) {
+				ensureParent(fullPath)
+				try {
+					FS.lookupPath(fullPath, { follow: false })
+				} catch(_) {
+					FS.writeFile(fullPath, new Uint8Array(0))
+				}
+				vpkPlaceholders++
+			}
 		}
 
 		if(!hasPortalGameInfo) {
@@ -116,11 +140,15 @@
 		if(!stat || Number(stat.size || 0) <= 0) {
 			throw new Error('/portal/gameinfo.txt is empty or not visible in shared MEMFS')
 		}
+		if(vpkPlaceholders <= 0) {
+			throw new Error('no Portal VPK names were exposed to the shared Source namespace')
+		}
 
 		Module.render360Phase3StartupMemfsBytes = bytes
 		Module.render360Phase3StartupMemfsFiles = count
-		Module.print?.(`[Render360 Phase 3] staged ${count} startup metadata files (${bytes} bytes) into shared MEMFS; VPK payload remains browser-backed`)
-		try { globalThis.render360SetPhase?.('phase3-startup-metadata-ready') } catch(_) {}
+		Module.render360Phase3VpkPlaceholders = vpkPlaceholders
+		Module.print?.(`[Render360 Phase 3] staged ${count} startup metadata files (${bytes} bytes) plus ${vpkPlaceholders} zero-byte VPK namespace placeholders; retail VPK payload remains browser-backed`)
+		try { globalThis.render360SetPhase?.(`phase3-startup-metadata-ready:vpk=${vpkPlaceholders}`) } catch(_) {}
 	}
 
 	window.addEventListener('message', event => {
