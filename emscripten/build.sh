@@ -164,6 +164,7 @@ EMCC_FORCE_STDLIBS=libc,libc++,libc++abi emcc -Os \
 	-sPROXY_TO_PTHREAD -sOFFSCREENCANVASES_TO_PTHREAD="#canvas" -sOFFSCREENCANVAS_SUPPORT=1 \
 	-lworkerfs.js \
 	--pre-js emscripten/pre.js \
+	--pre-js emscripten/phase3-mobile-runtime.js \
 	--post-js emscripten/phase3-workerfs.js --post-js emscripten/post.js \
 	$preload_libs \
 	build/launcher_main/libhl2_launcher.a \
