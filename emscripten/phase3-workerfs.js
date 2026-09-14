@@ -8,9 +8,10 @@
 //
 // WORKERFS reads Blob/File slices with FileReaderSync inside the worker. The VPK
 // bytes therefore do not become 221+ MiB of individual MEMFS files. Source's own
-// filesystem opens the real retail VPKs and performs its normal seek/range reads.
-// The existing chunk/MEMFS loader remains available when hl2_launcher.html is
-// opened directly, so Phase 3 can be tested without deleting the known fallback.
+// filesystem opens the real retail VPKs and loose BSP files and performs normal
+// seek/range reads. The existing chunk/MEMFS loader remains available when
+// hl2_launcher.html is opened directly, so Phase 3 can be tested without
+// deleting the known fallback.
 //
 // Map residency rule for the direct-VPK path:
 //   menu          -> background1 only
@@ -18,10 +19,11 @@
 //   transition    -> Source shuts the old level down, then opens the next BSP
 //   future maps   -> never prefetched by Render360
 //
-// The whole VPK set remains ADDRESSABLE through WORKERFS, but retail bytes are
-// not resident in MEMFS. Source's normal level shutdown owns native world/model/
-// material lifetime; the Render360 JS layer deliberately keeps no historical map
-// payload and never walks through earlier chambers to satisfy a later request.
+// The VPK set and loose map tree remain ADDRESSABLE through WORKERFS, but retail
+// bytes are not resident in MEMFS. Source's normal level shutdown owns native
+// world/model/material lifetime; the Render360 JS layer deliberately keeps no
+// historical map payload and never walks through earlier chambers to satisfy a
+// later request.
 
 ;(() => {
   'use strict'
@@ -36,9 +38,12 @@
   const HANDOFF_TIMEOUT_MS = 20000
   const RETAIL_MOUNT = '/render360-retail'
   const ROOT_RE = /^(portal|hl2|platform)\//i
+  const MAP_TREE_RE = /^(?:portal|hl2)\/maps\//i
+  const MENU_MAP_PATH = 'portal/maps/background1.bsp'
   const MENU_MAP = 'background1'
   const KNOWN_MAPS = new Set([
     'background1',
+    'background2',
     'testchmb_a_00',
     'testchmb_a_01',
     'testchmb_a_02',
@@ -53,7 +58,10 @@
     'testchmb_a_11',
     'testchmb_a_13',
     'testchmb_a_14',
-    'testchmb_a_15'
+    'testchmb_a_15',
+    'escape_00',
+    'escape_01',
+    'escape_02'
   ])
 
   const isWindow = typeof window !== 'undefined' && typeof document !== 'undefined'
@@ -144,7 +152,8 @@
     // There is intentionally no JS-side unload loop here. In the direct-VPK
     // path Render360 never unpacked the old map into MEMFS in the first place.
     // Source's native level shutdown releases the old BSP/world resources; the
-    // VPK files stay mounted as read-only backing storage for future range reads.
+    // browser File objects stay mounted as read-only backing storage for future
+    // range reads without becoming resident map payloads.
     if(previous) {
       safePrint(`[Render360 Phase 3] residency transition ${previous} -> ${next}: previous level is no longer a Render360 resident map; no future chamber was prefetched.`)
     } else if(next === MENU_MAP) {
@@ -160,18 +169,26 @@
     let bytes = 0
     let vpkFiles = 0
     let looseFiles = 0
+    let mapFiles = 0
+    let background1 = false
     for(const descriptor of descriptors || []) {
+      const path = normalizeRetailPath(descriptor?.path)
       bytes += Number(descriptor?.file?.size || 0)
-      if(/\.vpk$/i.test(descriptor?.path || '')) vpkFiles++
+      if(/\.vpk$/i.test(path)) vpkFiles++
       else looseFiles++
+      if(MAP_TREE_RE.test(path)) mapFiles++
+      if(path === MENU_MAP_PATH) background1 = true
     }
-    return { files: (descriptors || []).length, bytes, vpkFiles, looseFiles }
+    return { files: (descriptors || []).length, bytes, vpkFiles, looseFiles, mapFiles, background1 }
   }
 
   function shouldExposeRetailPath(path) {
     const clean = normalizeRetailPath(path)
     if(!ROOT_RE.test(clean)) return false
     if(/\.vpk$/i.test(clean)) return true
+    // Portal's BSPs are loose retail files. Expose the entire maps tree through
+    // WORKERFS so Source can open background1 and later chambers without MEMFS.
+    if(MAP_TREE_RE.test(clean)) return true
     if(/\/(?:gameinfo\.txt|steam\.inf|game\.inf)$/i.test(clean)) return true
     if(/\/(?:cfg|resource|scripts)\//i.test(clean)) return true
     return false
@@ -207,9 +224,14 @@
     }
     if(!blobs.length) throw new Error('Portal transfer contained no portal/, hl2/ or platform/ retail files')
 
-    // Keep direct File references on the Source pthread.  This is a reference
-    // map only: it does not copy a single VPK byte. filesystem_stdio can now
-    // resolve retail files without depending on WORKERFS node internals or a
+    const menuMapFile = directFiles.get(MENU_MAP_PATH)
+    if(!(menuMapFile instanceof Blob) || Number(menuMapFile.size || 0) <= 0) {
+      throw new Error('portal/maps/background1.bsp was not transferred; the real Portal menu map cannot start')
+    }
+
+    // Keep direct File references on the Source pthread. This is a reference
+    // map only: it does not copy a VPK or BSP byte. filesystem_stdio can resolve
+    // retail files without depending on WORKERFS node internals or a
     // main-thread-proxied JS FS lookup.
     globalThis.__render360RetailFileMap = directFiles
     globalThis.__render360RetailHandles = new Map()
@@ -244,8 +266,8 @@
     Module.render360ResidentBytes = Number(Module.render360ResidentBytes || 0)
     Module.render360ResidentFiles = Number(Module.render360ResidentFiles || 0)
     publishResidency()
-    safePhase(`phase3-workerfs-ready:vpk=${stats.vpkFiles}:links=${links}`)
-    safePrint(`[Render360 Phase 3] WORKERFS mounted ${stats.files} retail files (${stats.vpkFiles} VPKs, ${(stats.bytes / 1048576).toFixed(1)} MiB backing storage) with ${links} MEMFS symlinks and ${stats.directHandles} zero-copy direct File handles; retail payload bytes remain outside MEMFS.`)
+    safePhase(`phase3-workerfs-ready:vpk=${stats.vpkFiles}:maps=${stats.mapFiles}:links=${links}`)
+    safePrint(`[Render360 Phase 3] WORKERFS mounted ${stats.files} retail files (${stats.vpkFiles} VPKs, ${stats.mapFiles} loose map files, ${(stats.bytes / 1048576).toFixed(1)} MiB browser backing storage) with ${links} live symlinks and ${stats.directHandles} zero-copy direct File handles; retail payload bytes remain outside MEMFS.`)
     return stats
   }
 
@@ -287,7 +309,8 @@
       if(timeout) clearTimeout(timeout)
       Module.render360DirectVPKReady = true
       safePhase(`phase3-workers-ready:${mountedWorkers.size}`)
-      safePrint(`[Render360 Phase 3] ${mountedWorkers.size} pthread workers have zero-copy retail VPK access; background1 chunk preload is disabled, all packed map preloads are disabled, and Render360 map prefetch is disabled.`)
+      const stats = Module.render360DirectRetailStats || {}
+      safePrint(`[Render360 Phase 3] ${mountedWorkers.size} pthread workers have zero-copy retail access (${stats.vpkFiles || 0} VPKs, ${stats.mapFiles || 0} map files); background1 packed preload is disabled, all packed map preloads are disabled, and Render360 map prefetch is disabled.`)
       if(dependencyHeld) {
         dependencyHeld = false
         removeRunDependency('render360-direct-vpk')
@@ -342,9 +365,13 @@
       }
       descriptors = data.files
       const stats = retailDescriptorStats(descriptors)
+      if(!stats.background1) {
+        failHandoff('portal/maps/background1.bsp was not retained by the staging page')
+        return
+      }
       Module.render360DirectRetailStats = stats
-      safePhase(`phase3-retail-received:vpk=${stats.vpkFiles}`)
-      safePrint(`[Render360 Phase 3] received ${stats.files} zero-copy retail File handles (${stats.vpkFiles} VPKs); waiting for pthread WORKERFS mounts.`)
+      safePhase(`phase3-retail-received:vpk=${stats.vpkFiles}:maps=${stats.mapFiles}`)
+      safePrint(`[Render360 Phase 3] received ${stats.files} zero-copy retail File handles (${stats.vpkFiles} VPKs, ${stats.mapFiles} loose map files); waiting for pthread WORKERFS mounts.`)
       for(const id of readyWorkers) sendToWorker(id)
     })
 
@@ -382,12 +409,13 @@
         // This is the core current-map-only rule. Do not call the compatibility
         // loader, do not load background1 as a dependency of chambers, and do not
         // walk mapsOrdered. The requested BSP becomes the sole Render360 map
-        // residency checkpoint while Source reads only the VPK ranges it asks for.
+        // residency checkpoint while Source reads its real loose BSP and VPK
+        // dependencies lazily from the browser File objects.
         const transition = enterCurrentMap(mapName)
         this.setProgress?.(mapName, 1)
         const stats = Module.render360DirectVPKStats || Module.render360DirectRetailStats || {}
         const snapshot = globalThis.render360MemorySnapshot?.(`phase3-map-ready:${normalizeMapName(mapName)}`)
-        safePrint(`[Render360 Phase 3] ${normalizeMapName(mapName)}: current-map-only; skipped packed .data/MEMFS staging and all earlier/future map preloads. Source reads retail VPK ranges lazily through WORKERFS (vpkFiles=${stats.vpkFiles || 0}, generation=${transition.generation}, memory=${JSON.stringify(snapshot || {})}).`)
+        safePrint(`[Render360 Phase 3] ${normalizeMapName(mapName)}: current-map-only; skipped packed .data/MEMFS staging and all earlier/future map preloads. Source reads the loose BSP plus retail VPK ranges lazily through WORKERFS/direct File reads (vpkFiles=${stats.vpkFiles || 0}, mapFiles=${stats.mapFiles || 0}, generation=${transition.generation}, memory=${JSON.stringify(snapshot || {})}).`)
         return
       }
       return originalLoadMapWithDeps.call(this, mapName)
