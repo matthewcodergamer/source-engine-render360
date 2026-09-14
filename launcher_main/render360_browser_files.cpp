@@ -11,15 +11,20 @@
 #include <emscripten.h>
 #include <stddef.h>
 
+// Keep path normalization free of JavaScript regex literals whose escaped
+// trailing slash can become a C/C++ // token while EM_JS is being preprocessed.
+// String operations are tiny here and make this bridge stable across Clang/
+// Emscripten versions.
 EM_JS(int, render360_browser_file_open_js, (const char *pathPtr), {
   try {
     if (typeof FileReaderSync === 'undefined') return -1;
-    var path = UTF8ToString(pathPtr || 0)
-      .replace(/\\/g, '/')
-      .replace(/\/+/g, '/')
-      .replace(/^\/+/, '')
-      .replace(/(^|\/)\.\//g, '$1')
-      .toLowerCase();
+    var path = UTF8ToString(pathPtr || 0);
+    path = path.split('\\').join('/');
+    while (path.indexOf('//') >= 0) path = path.split('//').join('/');
+    while (path.charAt(0) === '/') path = path.slice(1);
+    while (path.indexOf('/./') >= 0) path = path.split('/./').join('/');
+    while (path.slice(0, 2) === './') path = path.slice(2);
+    path = path.toLowerCase();
 
     var file = null;
     var files = globalThis.__render360RetailFileMap;
@@ -86,12 +91,13 @@ EM_JS(void, render360_browser_file_close_js, (int handle), {
 
 EM_JS(double, render360_browser_file_stat_js, (const char *pathPtr), {
   try {
-    var path = UTF8ToString(pathPtr || 0)
-      .replace(/\\/g, '/')
-      .replace(/\/+/g, '/')
-      .replace(/^\/+/, '')
-      .replace(/(^|\/)\.\//g, '$1')
-      .toLowerCase();
+    var path = UTF8ToString(pathPtr || 0);
+    path = path.split('\\').join('/');
+    while (path.indexOf('//') >= 0) path = path.split('//').join('/');
+    while (path.charAt(0) === '/') path = path.slice(1);
+    while (path.indexOf('/./') >= 0) path = path.split('/./').join('/');
+    while (path.slice(0, 2) === './') path = path.slice(2);
+    path = path.toLowerCase();
     var file = null;
     var files = globalThis.__render360RetailFileMap;
     if (files && typeof files.get === 'function') file = files.get(path) || null;
