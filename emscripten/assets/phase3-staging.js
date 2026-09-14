@@ -6,6 +6,7 @@
   const CRASH_STATE_KEY = 'render360-ios-crash-state-v2';
   const DIRECT_ROOT_RE = /^(portal|hl2|platform)\//i;
   const DIRECT_LOOSE_RE = /\/(?:gameinfo\.txt|steam\.inf|game\.inf)$/i;
+  const DIRECT_MAP_TREE_RE = /^(?:portal|hl2)\/maps\//i;
   const DIRECT_SMALL_TREE_RE = /\/(?:cfg|resource|scripts)\//i;
   const MAX_LOOSE_BYTES = 8 * 1024 * 1024;
   const RESIDENCY_POLICY = 'menu-only → current-map-only → no future-map prefetch';
@@ -29,6 +30,10 @@
   function keepForDirectVPK(path, file) {
     if(!DIRECT_ROOT_RE.test(path)) return false;
     if(/\.vpk$/i.test(path)) return true;
+    // Portal ships its BSPs as loose files (for example
+    // portal/maps/background1.bsp). Keep File handles for the entire maps tree,
+    // including graphs, but never copy their payload into MEMFS.
+    if(DIRECT_MAP_TREE_RE.test(path)) return true;
     if(DIRECT_LOOSE_RE.test(path)) return true;
     if(DIRECT_SMALL_TREE_RE.test(path) && Number(file?.size || 0) <= MAX_LOOSE_BYTES) return true;
     return false;
@@ -38,14 +43,19 @@
     let bytes = 0;
     let vpks = 0;
     let dirs = 0;
+    let maps = 0;
     let gameinfo = false;
+    let background1 = false;
     for(const item of descriptors) {
+      const path = normalize(item.path);
       bytes += Number(item.file?.size || 0);
-      if(/\.vpk$/i.test(item.path)) vpks++;
-      if(/_dir\.vpk$/i.test(item.path)) dirs++;
-      if(/(^|\/)portal\/gameinfo\.txt$/i.test(item.path)) gameinfo = true;
+      if(/\.vpk$/i.test(path)) vpks++;
+      if(/_dir\.vpk$/i.test(path)) dirs++;
+      if(DIRECT_MAP_TREE_RE.test(path)) maps++;
+      if(path === 'portal/gameinfo.txt') gameinfo = true;
+      if(path === 'portal/maps/background1.bsp') background1 = true;
     }
-    return { files: descriptors.length, bytes, vpks, dirs, gameinfo };
+    return { files: descriptors.length, bytes, vpks, dirs, maps, gameinfo, background1 };
   }
 
   function setPhase3Status(text) {
@@ -56,12 +66,14 @@
   function refreshButton() {
     if(!phase3Button) return;
     const stats = summarize(retailDescriptors);
-    const ready = stats.gameinfo && stats.dirs > 0 && stats.vpks > 0;
+    const ready = stats.gameinfo && stats.background1 && stats.dirs > 0 && stats.vpks > 0;
     phase3Button.disabled = !ready;
     globalThis.render360Phase3DirectSelected = ready;
     if(ready) {
       phase3Button.textContent = 'Launch Phase 3 · Current Map Only';
-      setPhase3Status(`Phase 3 ready: ${stats.vpks} VPK files stay browser-backed. Policy: ${RESIDENCY_POLICY}. background1 and future chambers are never accumulated in MEMFS.`);
+      setPhase3Status(`Phase 3 ready: ${stats.vpks} VPKs + ${stats.maps} loose map files stay browser-backed. background1.bsp verified. Policy: ${RESIDENCY_POLICY}.`);
+    } else if(stats.gameinfo && stats.vpks > 0 && !stats.background1) {
+      setPhase3Status('Portal files were found, but portal/maps/background1.bsp is missing from the selected folder. Choose the full Portal installation folder so the real menu BSP can be streamed.');
     }
   }
 
@@ -76,11 +88,12 @@
     retailDescriptors = next;
     globalThis.render360Phase3RetailFiles = retailDescriptors;
     const stats = summarize(retailDescriptors);
-    globalThis.render360Phase3DirectSelected = !!(stats.gameinfo && stats.dirs > 0 && stats.vpks > 0);
+    globalThis.render360Phase3DirectSelected = !!(stats.gameinfo && stats.background1 && stats.dirs > 0 && stats.vpks > 0);
     try {
       sessionStorage.setItem('render360-phase3-retail-summary-v1', JSON.stringify({
         at: Date.now(), files: stats.files, vpks: stats.vpks, dirs: stats.dirs,
-        bytes: stats.bytes, gameinfo: stats.gameinfo, residencyPolicy: RESIDENCY_POLICY
+        maps: stats.maps, bytes: stats.bytes, gameinfo: stats.gameinfo,
+        background1: stats.background1, residencyPolicy: RESIDENCY_POLICY
       }));
     } catch(_) {}
     refreshButton();
@@ -119,8 +132,8 @@
 
   function launchDirectVPK() {
     const stats = summarize(retailDescriptors);
-    if(!stats.gameinfo || !stats.dirs || !stats.vpks) {
-      setPhase3Status('Choose the full Portal folder again before launching Phase 3. File objects cannot survive a page reload.');
+    if(!stats.gameinfo || !stats.background1 || !stats.dirs || !stats.vpks) {
+      setPhase3Status('Choose the full Portal folder again before launching Phase 3. It must include portal/gameinfo.txt, portal/maps/background1.bsp and the retail VPKs. File objects cannot survive a page reload.');
       return;
     }
 
@@ -143,7 +156,7 @@
     back.addEventListener('click', closeRuntime);
 
     const label = document.createElement('span');
-    label.textContent = `Phase 3 · current-map-only · ${stats.vpks} VPKs browser-backed · no future-map prefetch`;
+    label.textContent = `Phase 3 · current-map-only · ${stats.vpks} VPKs + ${stats.maps} map files browser-backed · no future-map prefetch`;
     label.style.cssText = 'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
     bar.append(back, label);
 
@@ -196,7 +209,7 @@
     const data = event?.data;
     if(!data || data.type !== REQUEST_TYPE || !data.token) return;
     const stats = summarize(retailDescriptors);
-    if(!stats.gameinfo || !stats.dirs || !stats.vpks) return;
+    if(!stats.gameinfo || !stats.background1 || !stats.dirs || !stats.vpks) return;
     runtimeFrame.contentWindow.postMessage({
       type: FILES_TYPE,
       token: data.token,
