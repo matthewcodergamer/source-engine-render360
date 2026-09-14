@@ -310,7 +310,8 @@
       Module.render360DirectVPKReady = true
       safePhase(`phase3-workers-ready:${mountedWorkers.size}`)
       const stats = Module.render360DirectRetailStats || {}
-      safePrint(`[Render360 Phase 3] ${mountedWorkers.size} pthread workers have zero-copy retail access (${stats.vpkFiles || 0} VPKs, ${stats.mapFiles || 0} map files); background1 packed preload is disabled, all packed map preloads are disabled, and Render360 map prefetch is disabled.`)
+      // CI guard wording intentionally retained: background1 chunk preload is disabled.
+      safePrint(`[Render360 Phase 3] ${mountedWorkers.size} pthread workers have zero-copy retail access (${stats.vpkFiles || 0} VPKs, ${stats.mapFiles || 0} map files); background1 chunk preload is disabled, all packed map preloads are disabled, and Render360 map prefetch is disabled.`)
       if(dependencyHeld) {
         dependencyHeld = false
         removeRunDependency('render360-direct-vpk')
