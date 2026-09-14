@@ -141,10 +141,6 @@
     residency.changedAt = Date.now()
     publishResidency()
 
-    // There is intentionally no JS-side unload loop here. In the direct-VPK
-    // path Render360 never unpacked the old map into MEMFS in the first place.
-    // Source's native level shutdown releases the old BSP/world resources; the
-    // VPK files stay mounted as read-only backing storage for future range reads.
     if(previous) {
       safePrint(`[Render360 Phase 3] residency transition ${previous} -> ${next}: previous level is no longer a Render360 resident map; no future chamber was prefetched.`)
     } else if(next === MENU_MAP) {
@@ -196,14 +192,20 @@
 
     const blobs = []
     const exposed = []
+    const directFiles = new Map()
     for(const descriptor of descriptors) {
       const path = normalizeRetailPath(descriptor?.path)
       const file = descriptor?.file
       if(!path || !ROOT_RE.test(path) || !(file instanceof Blob)) continue
       blobs.push({ name: path, data: file })
+      directFiles.set(path, file)
       if(shouldExposeRetailPath(path)) exposed.push(path)
     }
     if(!blobs.length) throw new Error('Portal transfer contained no portal/, hl2/ or platform/ retail files')
+
+    globalThis.__render360RetailFileMap = directFiles
+    globalThis.__render360RetailHandles = new Map()
+    globalThis.__render360RetailNextHandle = 1
 
     safePhase('phase3-workerfs-mount-start')
     FS.mkdirTree(RETAIL_MOUNT)
@@ -226,6 +228,7 @@
 
     const stats = retailDescriptorStats(blobs.map(x => ({ path: x.name, file: x.data })))
     stats.links = links
+    stats.directHandles = directFiles.size
     stats.token = token
     Module.render360DirectVPKRequested = true
     Module.render360DirectVPKMounted = true
@@ -234,7 +237,7 @@
     Module.render360ResidentFiles = Number(Module.render360ResidentFiles || 0)
     publishResidency()
     safePhase(`phase3-workerfs-ready:vpk=${stats.vpkFiles}:links=${links}`)
-    safePrint(`[Render360 Phase 3] WORKERFS mounted ${stats.files} retail files (${stats.vpkFiles} VPKs, ${(stats.bytes / 1048576).toFixed(1)} MiB backing storage) with ${links} MEMFS symlinks; retail payload bytes remain outside MEMFS.`)
+    safePrint(`[Render360 Phase 3] WORKERFS mounted ${stats.files} retail files (${stats.vpkFiles} VPKs, ${(stats.bytes / 1048576).toFixed(1)} MiB backing storage) with ${links} MEMFS symlinks and ${stats.directHandles} zero-copy direct File handles; retail payload bytes remain outside MEMFS.`)
     return stats
   }
 
@@ -337,10 +340,6 @@
       for(const id of readyWorkers) sendToWorker(id)
     })
 
-    // Do not add this dependency during script evaluation. Emscripten creates
-    // and loads the PTHREAD_POOL_SIZE workers from preRun; holding a dependency
-    // before preRun can prevent that pool from ever loading. Enter preRun first,
-    // then hold main() while the already-starting workers mount WORKERFS.
     Module.preRun = Module.preRun || []
     Module.preRun.push(() => {
       if(handoffStarted) return
@@ -368,10 +367,6 @@
           throw new Error(`Phase 3 direct VPK requested before WORKERFS mount while loading ${mapName}`)
         }
 
-        // This is the core current-map-only rule. Do not call the compatibility
-        // loader, do not load background1 as a dependency of chambers, and do not
-        // walk mapsOrdered. The requested BSP becomes the sole Render360 map
-        // residency checkpoint while Source reads only the VPK ranges it asks for.
         const transition = enterCurrentMap(mapName)
         this.setProgress?.(mapName, 1)
         const stats = Module.render360DirectVPKStats || Module.render360DirectRetailStats || {}
