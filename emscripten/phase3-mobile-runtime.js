@@ -25,6 +25,148 @@
   const isWindow = typeof window !== 'undefined' && typeof document !== 'undefined'
   if(!isWindow) return
 
+  // Source checks portal/gameinfo.txt during PREINITIALIZATION, before the normal
+  // VPK search path is established. Phase 3 intentionally keeps the retail VPKs
+  // browser-backed, but that earliest libc/FS check must see a real path in the
+  // runtime's primary MEMFS. Copy only tiny bootstrap metadata; never VPK/map
+  // payloads. The worker-side WORKERFS/direct-File bridge remains authoritative
+  // for large retail content.
+  const DIRECT_REQUEST_TYPE = 'render360-retail-request'
+  const DIRECT_FILES_TYPE = 'render360-retail-files'
+  const BOOTSTRAP_DEPENDENCY = 'render360-phase3-bootstrap-metadata'
+  const BOOTSTRAP_MAX_FILE_BYTES = 1024 * 1024
+  const BOOTSTRAP_MAX_TOTAL_BYTES = 2 * 1024 * 1024
+  const BOOTSTRAP_TIMEOUT_MS = 20000
+  const embeddedPhase3 = !!(
+    window.parent &&
+    window.parent !== window &&
+    new URLSearchParams(location.search).has('render360Phase3')
+  )
+
+  function normalizeRetailPath(value) {
+    return String(value || '')
+      .replace(/\\/g, '/')
+      .replace(/^\/+/, '')
+      .replace(/\/+/g, '/')
+      .toLowerCase()
+  }
+
+  function bootstrapMetadataPath(path) {
+    const clean = normalizeRetailPath(path)
+    if(!/^(portal|hl2|platform)\//.test(clean)) return false
+    return /\/(?:gameinfo\.txt|steam\.inf|game\.inf)$/.test(clean)
+  }
+
+  function dirname(path) {
+    const at = String(path || '').lastIndexOf('/')
+    return at <= 0 ? '/' : path.slice(0, at)
+  }
+
+  if(embeddedPhase3) {
+    const token = `bootstrap-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+    let dependencyHeld = false
+    let settled = false
+    let timeout = 0
+
+    function finishBootstrap() {
+      if(settled) return
+      settled = true
+      if(timeout) clearTimeout(timeout)
+      try { globalThis.render360SetPhase?.('phase3-bootstrap-ready') } catch(_) {}
+      if(dependencyHeld) {
+        dependencyHeld = false
+        removeRunDependency(BOOTSTRAP_DEPENDENCY)
+      }
+    }
+
+    function failBootstrap(message) {
+      if(settled) return
+      settled = true
+      if(timeout) clearTimeout(timeout)
+      const text = `[Render360 Phase 3] bootstrap metadata failed: ${message}`
+      try { globalThis.render360SetPhase?.(`phase3-bootstrap-failed:${String(message).slice(0, 120)}`) } catch(_) {}
+      try { Module.printErr?.(text) } catch(_) { try { console.error(text) } catch(__) {} }
+      if(typeof abort === 'function') abort(text)
+      else throw new Error(text)
+    }
+
+    async function stageBootstrapMetadata(descriptors) {
+      const selected = []
+      let declaredBytes = 0
+      for(const descriptor of descriptors || []) {
+        const path = normalizeRetailPath(descriptor?.path)
+        const file = descriptor?.file
+        if(!bootstrapMetadataPath(path) || !(file instanceof Blob)) continue
+        const size = Number(file.size || 0)
+        if(size <= 0 || size > BOOTSTRAP_MAX_FILE_BYTES) {
+          throw new Error(`${path} has invalid bootstrap size ${size}`)
+        }
+        declaredBytes += size
+        if(declaredBytes > BOOTSTRAP_MAX_TOTAL_BYTES) {
+          throw new Error(`bootstrap metadata exceeds ${BOOTSTRAP_MAX_TOTAL_BYTES} bytes`)
+        }
+        selected.push({ path, file, size })
+      }
+
+      if(!selected.some(item => item.path === 'portal/gameinfo.txt')) {
+        throw new Error('portal/gameinfo.txt was not supplied by the verified Portal folder')
+      }
+
+      let writtenBytes = 0
+      for(const item of selected) {
+        const buffer = await item.file.arrayBuffer()
+        if(buffer.byteLength !== item.size || buffer.byteLength > BOOTSTRAP_MAX_FILE_BYTES) {
+          throw new Error(`${item.path} changed size while staging`)
+        }
+        const livePath = '/' + item.path
+        FS.mkdirTree(dirname(livePath))
+        try { FS.unlink(livePath) } catch(_) {}
+        FS.writeFile(livePath, new Uint8Array(buffer))
+        writtenBytes += buffer.byteLength
+      }
+
+      let gameinfoStat = null
+      try { gameinfoStat = FS.stat('/portal/gameinfo.txt') } catch(_) {}
+      if(!gameinfoStat || Number(gameinfoStat.size || 0) <= 0) {
+        throw new Error('/portal/gameinfo.txt was not visible after MEMFS bootstrap staging')
+      }
+
+      Module.render360BootstrapMetadata = {
+        files: selected.length,
+        bytes: writtenBytes,
+        gameinfoBytes: Number(gameinfoStat.size || 0)
+      }
+      try {
+        Module.print?.(`[Render360 Phase 3] bootstrap metadata ready: ${selected.length} files, ${writtenBytes} bytes; /portal/gameinfo.txt is visible before Source PREINITIALIZATION.`)
+      } catch(_) {}
+    }
+
+    window.addEventListener('message', event => {
+      if(event.origin !== location.origin || event.source !== window.parent) return
+      const data = event?.data
+      if(!data || data.type !== DIRECT_FILES_TYPE || data.token !== token || settled) return
+      if(!Array.isArray(data.files) || !data.files.length) {
+        failBootstrap('staging page did not provide retail File handles')
+        return
+      }
+      stageBootstrapMetadata(data.files).then(finishBootstrap).catch(error => {
+        failBootstrap(String(error?.stack || error?.message || error))
+      })
+    })
+
+    Module.preRun = Module.preRun || []
+    Module.preRun.push(() => {
+      if(dependencyHeld || settled) return
+      addRunDependency(BOOTSTRAP_DEPENDENCY)
+      dependencyHeld = true
+      timeout = setTimeout(() => {
+        failBootstrap('timed out waiting for Portal bootstrap metadata')
+      }, BOOTSTRAP_TIMEOUT_MS)
+      try { globalThis.render360SetPhase?.('phase3-bootstrap-await-files') } catch(_) {}
+      window.parent.postMessage({ type: DIRECT_REQUEST_TYPE, token }, location.origin)
+    })
+  }
+
   const STARTUP_KEY = 'render360-startup-checkpoint-v2'
   const STARTUP_DEBUG_KEY = 'render360-startup-debug-v1'
   const STARTUP_TRACE_LIMIT = 24
