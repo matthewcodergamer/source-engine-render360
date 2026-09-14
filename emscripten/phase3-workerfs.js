@@ -196,14 +196,24 @@
 
     const blobs = []
     const exposed = []
+    const directFiles = new Map()
     for(const descriptor of descriptors) {
       const path = normalizeRetailPath(descriptor?.path)
       const file = descriptor?.file
       if(!path || !ROOT_RE.test(path) || !(file instanceof Blob)) continue
       blobs.push({ name: path, data: file })
+      directFiles.set(path, file)
       if(shouldExposeRetailPath(path)) exposed.push(path)
     }
     if(!blobs.length) throw new Error('Portal transfer contained no portal/, hl2/ or platform/ retail files')
+
+    // Keep direct File references on the Source pthread.  This is a reference
+    // map only: it does not copy a single VPK byte. filesystem_stdio can now
+    // resolve retail files without depending on WORKERFS node internals or a
+    // main-thread-proxied JS FS lookup.
+    globalThis.__render360RetailFileMap = directFiles
+    globalThis.__render360RetailHandles = new Map()
+    globalThis.__render360RetailNextHandle = 1
 
     safePhase('phase3-workerfs-mount-start')
     FS.mkdirTree(RETAIL_MOUNT)
@@ -226,6 +236,7 @@
 
     const stats = retailDescriptorStats(blobs.map(x => ({ path: x.name, file: x.data })))
     stats.links = links
+    stats.directHandles = directFiles.size
     stats.token = token
     Module.render360DirectVPKRequested = true
     Module.render360DirectVPKMounted = true
@@ -234,7 +245,7 @@
     Module.render360ResidentFiles = Number(Module.render360ResidentFiles || 0)
     publishResidency()
     safePhase(`phase3-workerfs-ready:vpk=${stats.vpkFiles}:links=${links}`)
-    safePrint(`[Render360 Phase 3] WORKERFS mounted ${stats.files} retail files (${stats.vpkFiles} VPKs, ${(stats.bytes / 1048576).toFixed(1)} MiB backing storage) with ${links} MEMFS symlinks; retail payload bytes remain outside MEMFS.`)
+    safePrint(`[Render360 Phase 3] WORKERFS mounted ${stats.files} retail files (${stats.vpkFiles} VPKs, ${(stats.bytes / 1048576).toFixed(1)} MiB backing storage) with ${links} MEMFS symlinks and ${stats.directHandles} zero-copy direct File handles; retail payload bytes remain outside MEMFS.`)
     return stats
   }
 
