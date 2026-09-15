@@ -1,0 +1,106 @@
+name: iOS Native Bootstrap IPA
+
+on:
+  push:
+    branches:
+      - render360/ios-native
+    paths:
+      - 'ios-native/**'
+      - '.github/workflows/ios-native.yml'
+      - 'docs/IOS_NATIVE_**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-ios-native:
+    runs-on: macos-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout source and submodules
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Print toolchain
+        run: |
+          set -euxo pipefail
+          xcodebuild -version
+          cmake --version
+          clang --version
+
+      - name: Verify no retail Portal data is committed under native project
+        shell: bash
+        run: |
+          set -euo pipefail
+          if find ios-native -type f \( -iname '*.vpk' -o -iname '*.bsp' -o -iname '*.vtf' -o -iname '*.vcs' -o -iname '*.wav' \) -print -quit | grep -q .; then
+            echo 'Retail/game asset file detected under ios-native/. Do not package Portal assets in the repository or IPA.' >&2
+            exit 1
+          fi
+
+      - name: Configure Xcode arm64 iPhone project
+        run: |
+          set -euxo pipefail
+          cmake -S ios-native -B build/ios -G Xcode \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_SYSROOT=iphoneos \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
+            -DRENDER360_BUNDLE_ID=com.render360.portal
+
+      - name: Build unsigned arm64 app
+        run: |
+          set -euxo pipefail
+          xcodebuild \
+            -project build/ios/Render360PortalIOS.xcodeproj \
+            -scheme Render360Portal \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            ONLY_ACTIVE_ARCH=NO \
+            ARCHS=arm64 \
+            build
+
+      - name: Verify arm64 bundle and package unsigned IPA
+        shell: bash
+        run: |
+          set -euxo pipefail
+          APP_PATH="$(find build/DerivedData/Build/Products/Release-iphoneos -maxdepth 1 -type d -name 'Render360Portal.app' -print -quit)"
+          test -n "$APP_PATH"
+          test -f "$APP_PATH/Render360Portal"
+          file "$APP_PATH/Render360Portal"
+          lipo -info "$APP_PATH/Render360Portal" | tee build/architecture.txt
+          grep -q 'arm64' build/architecture.txt
+
+          rm -rf build/ipa
+          mkdir -p build/ipa/Payload
+          ditto "$APP_PATH" build/ipa/Payload/Render360Portal.app
+
+          cat > build/ipa/BUILD_INFO.txt <<INFO
+          Render360 Portal native iOS bootstrap
+          commit=${GITHUB_SHA}
+          branch=${GITHUB_REF_NAME}
+          configuration=Release
+          arch=arm64
+          signing=unsigned
+          retail_assets=bundled:no
+          INFO
+
+          (cd build/ipa && /usr/bin/zip -qry ../Render360-Portal-iOS-unsigned.ipa Payload BUILD_INFO.txt)
+          ls -lh build/Render360-Portal-iOS-unsigned.ipa
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: Render360-Portal-iOS-unsigned-${{ github.run_number }}
+          path: |
+            build/Render360-Portal-iOS-unsigned.ipa
+            build/architecture.txt
+          if-no-files-found: error
+          retention-days: 30
