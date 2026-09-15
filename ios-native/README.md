@@ -2,6 +2,12 @@
 
 This directory is the primary iPhone port target. The browser/WebAssembly work remains preserved on the existing Render360 branches, but native iOS no longer depends on Safari, WebAssembly, MEMFS/WORKERFS, SharedArrayBuffer, COOP/COEP, service workers, or browser fullscreen behavior.
 
+## Start here for AI implementation
+
+Use `docs/IOS_NATIVE_ZERO_TO_IPA_PROMPT_PACK.md` as the canonical zero-to-complete execution prompt pack. It contains the global implementation contract, phase prompts from bootstrap through signed IPA and final release audit, plus dedicated recovery prompts for CI, device crashes, renderer black screens, Portal import/VPK failures, signing failures and memory/jetsam problems.
+
+`docs/IOS_NATIVE_AI_PROMPTS.md` remains the original N0-N14 prompt set and useful supporting reference. If the two differ in execution procedure, use the newer zero-to-IPA prompt pack while preserving architecture constraints from the master plan and architecture documents.
+
 ## Scope
 
 The target is a real arm64 iPhone application, not a web wrapper and not a mock renderer.
@@ -108,4 +114,6 @@ xcodebuild \
   build
 ```
 
-See `docs/IOS_NATIVE_AI_PROMPTS.md` for the zero-to-complete implementation prompts.
+Primary implementation prompts: `docs/IOS_NATIVE_ZERO_TO_IPA_PROMPT_PACK.md`.
+Supporting roadmap: `docs/IOS_NATIVE_MASTER_PLAN.md`.
+Original prompt set: `docs/IOS_NATIVE_AI_PROMPTS.md`.
