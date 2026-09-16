@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(Render360PortalIOS VERSION 0.2.0 LANGUAGES C CXX OBJC OBJCXX)
+project(Render360PortalIOS VERSION 0.3.0 LANGUAGES C CXX OBJC OBJCXX)
 
 if(NOT IOS)
   message(FATAL_ERROR "Render360PortalIOS must be configured with -DCMAKE_SYSTEM_NAME=iOS")
@@ -32,6 +32,7 @@ if(CMAKE_OSX_DEPLOYMENT_TARGET AND NOT CMAKE_OSX_DEPLOYMENT_TARGET STREQUAL REND
 endif()
 
 include(cmake/SDL2Pinned.cmake)
+include(cmake/SourceFoundation.cmake)
 
 add_executable(Render360Portal MACOSX_BUNDLE
   Sources/main.mm
@@ -54,10 +55,13 @@ add_executable(Render360Portal MACOSX_BUNDLE
   Sources/R360SDLHost.mm
 )
 
+add_dependencies(Render360Portal r360_source_foundation)
+
 target_compile_definitions(Render360Portal PRIVATE
   RENDER360_IOS_NATIVE=1
   RENDER360_PORTAL_NATIVE_BOOTSTRAP=1
   RENDER360_N1_SDL_HOST=1
+  RENDER360_N2_SOURCE_FOUNDATION=1
   SDL_MAIN_HANDLED=1
   RENDER360_BUILD_IDENTIFIER="${RENDER360_BUILD_IDENTIFIER}"
 )
@@ -93,6 +97,4 @@ set_target_properties(Render360Portal PROPERTIES
 )
 
 message(STATUS
-  "Render360 iOS N1 target: sdk=${CMAKE_OSX_SYSROOT} arch=${CMAKE_OSX_ARCHITECTURES} deployment=${RENDER360_DEPLOYMENT_TARGET} bundle=${RENDER360_BUNDLE_ID}")
-
-# N1 stops at the SDL/GLES/input/audio host. Source libraries begin in N2.
+  "Render360 iOS N2 target: sdk=${CMAKE_OSX_SYSROOT} arch=${CMAKE_OSX_ARCHITECTURES} deployment=${RENDER360_DEPLOYMENT_TARGET} bundle=${RENDER360_BUNDLE_ID}")
