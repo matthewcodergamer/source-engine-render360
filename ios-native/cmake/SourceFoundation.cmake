@@ -22,7 +22,7 @@ target_include_directories(r360_source_ios_platform INTERFACE
 )
 
 # N2 starts with the portable/native core of the repository's own tier0
-# source inventory.  Desktop-only profilers, crash/minidump handlers and
+# source inventory. Desktop-only profilers, crash/minidump handlers and
 # allocator replacement layers remain out of this first iOS foundation slice.
 set(R360_TIER0_SOURCES
   "${RENDER360_SOURCE_ROOT}/tier0/commandline.cpp"
@@ -41,9 +41,9 @@ set_target_properties(r360_tier0 PROPERTIES
   XCODE_ATTRIBUTE_SUPPORTED_PLATFORMS "iphoneos"
 )
 
-# Explicit tier1 core list derived from tier1/wscript.  This is sufficient to
-# establish the true tier1->tier0 dependency without pulling filesystem or the
-# engine runtime into N2.
+# Explicit tier1 core list derived from tier1/wscript. This establishes the
+# true tier1 -> tier0 dependency without pulling filesystem or engine runtime
+# into N2.
 set(R360_TIER1_SOURCES
   "${RENDER360_SOURCE_ROOT}/tier1/bitbuf.cpp"
   "${RENDER360_SOURCE_ROOT}/tier1/byteswap.cpp"
@@ -80,24 +80,31 @@ set_target_properties(r360_tier1 PROPERTIES
   XCODE_ATTRIBUTE_SUPPORTED_PLATFORMS "iphoneos"
 )
 
-# Portable/scalar mathlib foundation.  The repository's SIMD files include
-# public/mathlib/ssemath.h, which selects sse2neon.h on AArch64, but that
-# dependency is absent from this repository and its pinned thirdparty tree.
-# N2 therefore does not fake an SSE implementation: SIMD translation remains
-# an explicit follow-up incompatibility while this real scalar/core mathlib
-# slice establishes the ARM64 build graph.
+# Exact mathlib source inventory from mathlib/wscript. On AArch64 this Source
+# branch's SSE implementation includes common/sse2neon.h, so N2 keeps the
+# genuine mathlib implementation and lets compiler diagnostics identify any
+# unsupported intrinsic instead of replacing it with fake/scalar stubs.
 set(R360_MATHLIB_SOURCES
-  "${RENDER360_SOURCE_ROOT}/mathlib/almostequal.cpp"
-  "${RENDER360_SOURCE_ROOT}/mathlib/anorms.cpp"
-  "${RENDER360_SOURCE_ROOT}/mathlib/bumpvects.cpp"
   "${RENDER360_SOURCE_ROOT}/mathlib/color_conversion.cpp"
   "${RENDER360_SOURCE_ROOT}/mathlib/halton.cpp"
+  "${RENDER360_SOURCE_ROOT}/mathlib/lightdesc.cpp"
+  "${RENDER360_SOURCE_ROOT}/mathlib/mathlib_base.cpp"
+  "${RENDER360_SOURCE_ROOT}/mathlib/powsse.cpp"
+  "${RENDER360_SOURCE_ROOT}/mathlib/sparse_convolution_noise.cpp"
+  "${RENDER360_SOURCE_ROOT}/mathlib/sseconst.cpp"
+  "${RENDER360_SOURCE_ROOT}/mathlib/sse.cpp"
+  "${RENDER360_SOURCE_ROOT}/mathlib/ssenoise.cpp"
+  "${RENDER360_SOURCE_ROOT}/mathlib/anorms.cpp"
+  "${RENDER360_SOURCE_ROOT}/mathlib/bumpvects.cpp"
   "${RENDER360_SOURCE_ROOT}/mathlib/IceKey.cpp"
   "${RENDER360_SOURCE_ROOT}/mathlib/imagequant.cpp"
   "${RENDER360_SOURCE_ROOT}/mathlib/polyhedron.cpp"
   "${RENDER360_SOURCE_ROOT}/mathlib/quantize.cpp"
+  "${RENDER360_SOURCE_ROOT}/mathlib/randsse.cpp"
   "${RENDER360_SOURCE_ROOT}/mathlib/spherical.cpp"
+  "${RENDER360_SOURCE_ROOT}/mathlib/simdvectormatrix.cpp"
   "${RENDER360_SOURCE_ROOT}/mathlib/vmatrix.cpp"
+  "${RENDER360_SOURCE_ROOT}/mathlib/almostequal.cpp"
 )
 add_library(r360_mathlib STATIC ${R360_MATHLIB_SOURCES})
 target_link_libraries(r360_mathlib PUBLIC r360_tier1 r360_tier0 r360_source_ios_platform)
