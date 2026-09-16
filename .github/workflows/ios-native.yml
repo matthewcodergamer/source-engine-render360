@@ -66,6 +66,7 @@ jobs:
             -scheme Render360Portal \
             -configuration Release \
             -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
             -showBuildSettings | tee build/xcode-build-settings.txt
 
           grep -Eq '^[[:space:]]*ARCHS = arm64$' build/xcode-build-settings.txt
@@ -74,6 +75,8 @@ jobs:
           grep -Eq '^[[:space:]]*PRODUCT_BUNDLE_IDENTIFIER = com\.render360\.portal$' build/xcode-build-settings.txt
           grep -Eq '^[[:space:]]*SUPPORTED_PLATFORMS = iphoneos$' build/xcode-build-settings.txt
           grep -Eq '^[[:space:]]*TARGETED_DEVICE_FAMILY = 1$' build/xcode-build-settings.txt
+          grep -Eq '^[[:space:]]*SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO$' build/xcode-build-settings.txt
+          grep -Eq '^[[:space:]]*SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO$' build/xcode-build-settings.txt
 
       - name: Build unsigned arm64 app
         run: |
