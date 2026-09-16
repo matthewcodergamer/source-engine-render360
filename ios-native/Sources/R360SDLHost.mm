@@ -17,6 +17,7 @@
 @property(nonatomic, assign, readwrite, getter=isRunning) BOOL running;
 @property(nonatomic, assign) BOOL renderingEnabled;
 @property(nonatomic, assign) BOOL firstFramePresented;
+- (void)performFrame;
 @end
 
 static void SDLCALL R360FrameCallback(void *context) {
