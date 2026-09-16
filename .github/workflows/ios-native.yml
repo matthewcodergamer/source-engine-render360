@@ -71,12 +71,35 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          APP_PATH="$(find build/DerivedData/Build/Products/Release-iphoneos -maxdepth 1 -type d -name 'Render360Portal.app' -print -quit)"
-          test -n "$APP_PATH"
+
+          resolve_app_path() {
+            local candidate
+            for candidate in \
+              build/ios/Release-iphoneos/Render360Portal.app \
+              build/DerivedData/Build/Products/Release-iphoneos/Render360Portal.app; do
+              if [ -d "$candidate" ]; then
+                printf '%s\n' "$candidate"
+                return 0
+              fi
+            done
+
+            find build -type d -path '*/Release-iphoneos/Render360Portal.app' -print -quit 2>/dev/null || true
+          }
+
+          APP_PATH="$(resolve_app_path)"
+          if [ -z "$APP_PATH" ] || [ ! -d "$APP_PATH" ]; then
+            echo 'Render360 Portal: could not locate the built iPhoneOS .app bundle.' >&2
+            find build -maxdepth 6 -type d -name '*.app' -print 2>/dev/null || true
+            exit 1
+          fi
+
           test -f "$APP_PATH/Render360Portal"
           file "$APP_PATH/Render360Portal"
           lipo -info "$APP_PATH/Render360Portal" | tee build/architecture.txt
           grep -q 'arm64' build/architecture.txt
+
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_PATH/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP_PATH/Info.plist" | grep -qx 'Render360Portal'
 
           rm -rf build/ipa
           mkdir -p build/ipa/Payload
@@ -90,9 +113,12 @@ jobs:
           arch=arm64
           signing=unsigned
           retail_assets=bundled:no
+          source_app_path=${APP_PATH}
           INFO
 
           (cd build/ipa && /usr/bin/zip -qry ../Render360-Portal-iOS-unsigned.ipa Payload BUILD_INFO.txt)
+          test -s build/Render360-Portal-iOS-unsigned.ipa
+          /usr/bin/unzip -l build/Render360-Portal-iOS-unsigned.ipa | grep -q 'Payload/Render360Portal.app/Render360Portal'
           ls -lh build/Render360-Portal-iOS-unsigned.ipa
 
       - name: Upload unsigned IPA
