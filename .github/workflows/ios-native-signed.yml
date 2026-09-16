@@ -107,16 +107,40 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          APP_PATH="$(find build/DerivedData/Build/Products/Release-iphoneos -maxdepth 1 -type d -name 'Render360Portal.app' -print -quit)"
-          test -n "$APP_PATH"
+
+          resolve_app_path() {
+            local candidate
+            for candidate in \
+              build/ios/Release-iphoneos/Render360Portal.app \
+              build/DerivedData/Build/Products/Release-iphoneos/Render360Portal.app; do
+              if [ -d "$candidate" ]; then
+                printf '%s\n' "$candidate"
+                return 0
+              fi
+            done
+
+            find build -type d -path '*/Release-iphoneos/Render360Portal.app' -print -quit 2>/dev/null || true
+          }
+
+          APP_PATH="$(resolve_app_path)"
+          if [ -z "$APP_PATH" ] || [ ! -d "$APP_PATH" ]; then
+            echo 'Render360 Portal: could not locate the signed iPhoneOS .app bundle.' >&2
+            find build -maxdepth 6 -type d -name '*.app' -print 2>/dev/null || true
+            exit 1
+          fi
+
+          test -f "$APP_PATH/Render360Portal"
           codesign --verify --deep --strict --verbose=2 "$APP_PATH"
           codesign -d --entitlements :- "$APP_PATH" || true
-          lipo -info "$APP_PATH/Render360Portal"
+          lipo -info "$APP_PATH/Render360Portal" | grep -q 'arm64'
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_PATH/Info.plist"
 
           rm -rf build/ipa-signed
           mkdir -p build/ipa-signed/Payload
           ditto "$APP_PATH" build/ipa-signed/Payload/Render360Portal.app
           (cd build/ipa-signed && /usr/bin/zip -qry ../Render360-Portal-iOS-signed.ipa Payload)
+          test -s build/Render360-Portal-iOS-signed.ipa
+          /usr/bin/unzip -l build/Render360-Portal-iOS-signed.ipa | grep -q 'Payload/Render360Portal.app/Render360Portal'
           ls -lh build/Render360-Portal-iOS-signed.ipa
 
       - name: Upload signed IPA
