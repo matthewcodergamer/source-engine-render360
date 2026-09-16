@@ -22,7 +22,10 @@ jobs:
         run: |
           set -euo pipefail
           if find ios-native -type f \( -iname '*.vpk' -o -iname '*.bsp' -o -iname '*.vtf' -o -iname '*.vmt' -o -iname '*.vcs' -o -iname '*.wav' -o -iname '*.mp3' -o -iname '*.mdl' \) -print -quit | grep -q .; then echo 'Retail game asset detected.' >&2; exit 1; fi
-          if grep -RInE '__EMSCRIPTEN__|MEMFS|WORKERFS|SharedArrayBuffer|PROXY_TO_PTHREAD|OffscreenCanvas' ios-native/Sources ios-native/CMakeLists.txt ios-native/cmake; then echo 'Browser runtime dependency entered native target.' >&2; exit 1; fi
+          if grep -RInE '__EMSCRIPTEN__|MEMFS|WORKERFS|SharedArrayBuffer|PROXY_TO_PTHREAD|OffscreenCanvas' ios-native/Sources ios-native/SourceCompat ios-native/CMakeLists.txt ios-native/cmake; then echo 'Browser runtime dependency entered native target.' >&2; exit 1; fi
+          grep -q 'add_library(r360_tier0 STATIC' ios-native/cmake/SourceFoundation.cmake
+          grep -q 'add_library(r360_tier1 STATIC' ios-native/cmake/SourceFoundation.cmake
+          grep -q 'add_library(r360_mathlib STATIC' ios-native/cmake/SourceFoundation.cmake
       - name: Configure Xcode arm64 iPhone project
         run: |
           set -euxo pipefail
@@ -42,11 +45,32 @@ jobs:
           grep -Eq '^[[:space:]]*TARGETED_DEVICE_FAMILY = 1$' build/xcode-build-settings.txt
           grep -Eq '^[[:space:]]*SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO$' build/xcode-build-settings.txt
           grep -Eq '^[[:space:]]*SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO$' build/xcode-build-settings.txt
-      - name: Build unsigned arm64 N1 app
+      - name: Build N2 Source foundation in dependency order
+        shell: bash
+        run: |
+          set -euxo pipefail
+          for target in r360_tier0 r360_tier1 r360_mathlib; do
+            echo "=== building ${target} ==="
+            xcodebuild -project build/ios/Render360PortalIOS.xcodeproj -target "${target}" -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO ONLY_ACTIVE_ARCH=NO ARCHS=arm64 build
+          done
+      - name: Verify N2 static ARM64 products
+        shell: bash
+        run: |
+          set -euxo pipefail
+          : > build/foundation-libraries.txt
+          for stem in tier0_ios tier1_ios mathlib_ios; do
+            lib="$(find build/ios -type f -name "lib${stem}.a" -print -quit)"
+            test -n "$lib"
+            archs="$(lipo -archs "$lib")"
+            test "$archs" = arm64
+            echo "${stem}=${lib} arch=${archs}" | tee -a build/foundation-libraries.txt
+          done
+          if grep -Eq '(^|[[:space:]])(i386|x86_64)([[:space:]]|$)' build/foundation-libraries.txt; then exit 1; fi
+      - name: Build unsigned arm64 N2 app
         run: |
           set -euxo pipefail
           xcodebuild -project build/ios/Render360PortalIOS.xcodeproj -scheme Render360Portal -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build/DerivedData CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO ONLY_ACTIVE_ARCH=NO ARCHS=arm64 build
-      - name: Verify N1 bundle and package unsigned IPA
+      - name: Verify N2 bundle and package unsigned IPA
         shell: bash
         run: |
           set -euxo pipefail
@@ -73,10 +97,11 @@ jobs:
           PY
           rm -rf build/ipa; mkdir -p build/ipa/Payload; ditto "$APP_PATH" build/ipa/Payload/Render360Portal.app
           cat > build/ipa/BUILD_INFO.txt <<INFO
-          Render360 Portal native iOS N1 SDL host
+          Render360 Portal native iOS N2 Source foundation
           commit=${GITHUB_SHA}
           sdl=2.32.10
           sdl_commit=5d249570393f7a37e037abf22cd6012a4cc56a71
+          source_foundation=tier0,tier1,mathlib
           sdk=iphoneos
           deployment=15.0
           arch=arm64
@@ -94,6 +119,7 @@ jobs:
           path: |
             build/Render360-Portal-iOS-unsigned.ipa
             build/architecture.txt
+            build/foundation-libraries.txt
             build/xcode-build-settings.txt
             build/ipa-contents.txt
             build/ios/render360-sdl2-version.txt
