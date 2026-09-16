@@ -2,7 +2,15 @@ name: iOS Native Bootstrap IPA
 on:
   push:
     branches: [render360/ios-native]
-    paths: ['ios-native/**','.github/workflows/ios-native.yml','docs/IOS_NATIVE_**']
+    paths:
+      - 'ios-native/**'
+      - 'tier0/**'
+      - 'tier1/**'
+      - 'mathlib/**'
+      - 'common/**'
+      - 'public/**'
+      - '.github/workflows/ios-native.yml'
+      - 'docs/IOS_NATIVE_**'
   workflow_dispatch:
 permissions: { contents: read }
 jobs:
