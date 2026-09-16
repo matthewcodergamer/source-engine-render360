@@ -17,9 +17,9 @@
 /*
  * This Source branch predates iOS support and uses POSIX/OSX as its Darwin
  * feature switches. Keep those compatibility defines centralized here
- * instead of scattering them through Valve source files. OSX here means
- * "Darwin APIs/header layout" to the legacy Source platform layer; it does
- * not mean that the target is macOS.
+ * instead of scattering them through Valve source files. OSX and _OSX here
+ * mean "Darwin APIs/header layout" to the legacy Source platform layer; they
+ * do not mean that the target is macOS.
  *
  * The legacy platform header also tests the historical GNUC build-system
  * switch in addition to the compiler-provided __GNUC__/__clang__ macros.
@@ -32,6 +32,10 @@
 
 #ifndef OSX
 #define OSX 1
+#endif
+
+#ifndef _OSX
+#define _OSX 1
 #endif
 
 #ifndef GNUC
