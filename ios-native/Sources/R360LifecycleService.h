@@ -8,6 +8,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)r360AudioInterruptionBegan;
 - (void)r360AudioInterruptionEndedShouldResume:(BOOL)shouldResume;
 - (void)r360OrientationDidChange;
+- (void)r360WillTerminate;
 @end
 @interface R360LifecycleService : NSObject
 @property(nonatomic, weak, nullable) id<R360LifecycleServiceDelegate> delegate;

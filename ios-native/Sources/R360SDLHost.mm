@@ -18,6 +18,7 @@
 @property(nonatomic, assign) BOOL renderingEnabled;
 @property(nonatomic, assign) BOOL firstFramePresented;
 - (void)performFrame;
+- (void)cleanupHost;
 @end
 
 static void SDLCALL R360FrameCallback(void *context) {
@@ -53,26 +54,33 @@ static void SDLCALL R360FrameCallback(void *context) {
         width, height, SDL_WINDOW_OPENGL | SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_FULLSCREEN);
     if (!self.window) {
         if (error) *error = [NSString stringWithFormat:@"SDL_CreateWindow failed: %s", SDL_GetError()];
-        SDL_Quit(); return NO;
+        [self cleanupHost];
+        return NO;
     }
     [R360Diagnostics.sharedDiagnostics setCheckpoint:@"sdl-window-created"];
     self.renderer = [R360GLESRendererBackend new];
     NSString *localError = nil;
     if (![self.renderer startWithWindow:self.window error:&localError]) {
-        if (error) *error = localError; return NO;
+        if (error) *error = localError;
+        [self cleanupHost];
+        return NO;
     }
     self.input = [R360SDLInputDiagnostics new];
     [self.input openConnectedControllers];
     self.audio = [R360SDLAudioHost new];
     if (![self.audio start:&localError]) {
-        if (error) *error = localError; return NO;
+        if (error) *error = localError;
+        [self cleanupHost];
+        return NO;
     }
     R360LifecycleService.sharedService.delegate = self;
     [R360LifecycleService.sharedService startObserving];
     self.renderingEnabled = YES;
     self.running = YES;
+    self.firstFramePresented = NO;
     if (SDL_iPhoneSetAnimationCallback(self.window, 1, R360FrameCallback, (__bridge void *)self) != 0) {
         if (error) *error = [NSString stringWithFormat:@"SDL_iPhoneSetAnimationCallback failed: %s", SDL_GetError()];
+        [self cleanupHost];
         return NO;
     }
     return YES;
@@ -95,6 +103,23 @@ static void SDLCALL R360FrameCallback(void *context) {
     }
 }
 
+- (void)cleanupHost {
+    self.renderingEnabled = NO;
+    self.running = NO;
+    [self.audio shutdown];
+    [self.input shutdown];
+    [self.renderer shutdown];
+    self.audio = nil;
+    self.input = nil;
+    self.renderer = nil;
+    if (self.window) {
+        SDL_DestroyWindow(self.window);
+        self.window = NULL;
+    }
+    if (SDL_WasInit(0) != 0) SDL_Quit();
+    self.firstFramePresented = NO;
+}
+
 - (void)r360WillResignActive { self.renderingEnabled = NO; [self.audio pause]; }
 - (void)r360DidBecomeActive { [self.renderer resume]; [self.audio resume]; self.renderingEnabled = YES; }
 - (void)r360DidEnterBackground { self.renderingEnabled = NO; [self.audio pause]; }
@@ -102,4 +127,5 @@ static void SDLCALL R360FrameCallback(void *context) {
 - (void)r360AudioInterruptionBegan { [self.audio pause]; }
 - (void)r360AudioInterruptionEndedShouldResume:(BOOL)shouldResume { if (shouldResume) [self.audio resume]; }
 - (void)r360OrientationDidChange { [self.renderer refreshMetrics]; }
+- (void)r360WillTerminate { [self cleanupHost]; }
 @end

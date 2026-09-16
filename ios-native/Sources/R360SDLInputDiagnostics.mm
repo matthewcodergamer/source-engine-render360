@@ -18,7 +18,8 @@
     SDL_JoystickID identifier = SDL_JoystickInstanceID(joystick);
     _controllers[identifier] = controller;
     const char *name = SDL_GameControllerName(controller);
-    [R360Diagnostics.sharedDiagnostics setInputState:[NSString stringWithFormat:@"controller connected: %s", name ?: "unknown"]];
+    SDL_GameControllerType type = SDL_GameControllerGetType(controller);
+    [R360Diagnostics.sharedDiagnostics setInputState:[NSString stringWithFormat:@"controller connected: %s | type %d | instance %d", name ?: "unknown", (int)type, (int)identifier]];
 }
 
 - (void)openConnectedControllers {
@@ -50,7 +51,7 @@
         case SDL_CONTROLLERDEVICEREMOVED: {
             auto it = _controllers.find(event->cdevice.which);
             if (it != _controllers.end()) { SDL_GameControllerClose(it->second); _controllers.erase(it); }
-            [R360Diagnostics.sharedDiagnostics setInputState:@"controller disconnected"];
+            [R360Diagnostics.sharedDiagnostics setInputState:[NSString stringWithFormat:@"controller disconnected: instance %d", (int)event->cdevice.which]];
             break;
         }
         case SDL_CONTROLLERBUTTONDOWN:
@@ -71,5 +72,6 @@
 - (void)shutdown {
     for (auto &entry : _controllers) SDL_GameControllerClose(entry.second);
     _controllers.clear();
+    self.activeTouches = 0;
 }
 @end

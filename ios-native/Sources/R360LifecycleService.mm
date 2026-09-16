@@ -17,6 +17,7 @@
     [nc addObserver:self selector:@selector(memoryWarning:) name:UIApplicationDidReceiveMemoryWarningNotification object:nil];
     [nc addObserver:self selector:@selector(orientation:) name:UIDeviceOrientationDidChangeNotification object:nil];
     [nc addObserver:self selector:@selector(audioInterruption:) name:AVAudioSessionInterruptionNotification object:AVAudioSession.sharedInstance];
+    [nc addObserver:self selector:@selector(willTerminate:) name:UIApplicationWillTerminateNotification object:nil];
     [UIDevice.currentDevice beginGeneratingDeviceOrientationNotifications];
     [R360Diagnostics.sharedDiagnostics setLifecycleState:@"observing"];
 }
@@ -37,5 +38,11 @@
         [R360Diagnostics.sharedDiagnostics setCheckpoint:@"audio-interruption-end"];
         [self.delegate r360AudioInterruptionEndedShouldResume:resume];
     }
+}
+- (void)willTerminate:(NSNotification *)n {
+    (void)n;
+    [R360Diagnostics.sharedDiagnostics setLifecycleState:@"terminating"];
+    [R360Diagnostics.sharedDiagnostics setCheckpoint:@"application-will-terminate"];
+    [self.delegate r360WillTerminate];
 }
 @end
