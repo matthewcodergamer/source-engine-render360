@@ -1,6 +1,6 @@
 # Render360 Portal Native iOS — Porting Audit
 
-Status: Phase 00 baseline audit for branch `render360/ios-native`.
+Status: **Phase 00 complete for repository + CI baseline.** Physical-device launch remains a Phase 01 gate.
 
 This document records what is actually implemented, what is only planned, what must stay out of the native target, and the exact next areas to touch. It is not evidence that Portal gameplay is already running on iOS.
 
@@ -13,7 +13,7 @@ Implemented now:
 - `ios-native/CMakeLists.txt` creates the `Render360Portal` iOS app target.
 - `ios-native/Sources/main.mm` launches UIKit, presents a folder picker, starts/stops security-scoped access for the selected URL, and validates a candidate Portal root by checking `portal/gameinfo.txt`, `portal/`, `hl2/`, `platform/`, and at least one VPK.
 - `ios-native/Info.plist` declares an ARM64 iOS app, document access, landscape orientations, and a launch screen dictionary.
-- `.github/workflows/ios-native.yml` configures and builds an unsigned ARM64 iPhoneOS app and is intended to package `Render360-Portal-iOS-unsigned.ipa`.
+- `.github/workflows/ios-native.yml` configures and builds an unsigned ARM64 iPhoneOS app and packages `Render360-Portal-iOS-unsigned.ipa`.
 - `.github/workflows/ios-native-signed.yml` provides a manually triggered certificate/provisioning-profile signing path.
 - CI rejects obvious retail game files under `ios-native/` (`*.vpk`, `*.bsp`, `*.vtf`, `*.vcs`, `*.wav`).
 
@@ -29,7 +29,7 @@ Not implemented yet:
 - `background1`, chamber gameplay, Source audio, map lifecycle, or iPhone 11 performance proof.
 - Physical-device proof for the current bootstrap in this repository history.
 
-## Phase 00 CI finding and fix target
+## Phase 00 CI finding and resolution
 
 The first native IPA workflow proved that CMake configuration and the ARM64 iPhoneOS build succeed, but packaging failed after the build. The generated CMake/Xcode project placed the app at:
 
@@ -39,7 +39,18 @@ while the workflow only searched:
 
 `build/DerivedData/Build/Products/Release-iphoneos/Render360Portal.app`
 
-The native workflow must resolve the actual CMake/Xcode product directory before declaring N0 artifact creation complete. The same path assumption exists in the signed workflow and must be corrected there too.
+Both native workflows now resolve the actual CMake/Xcode product location, prefer the CMake Xcode generator's `build/ios/Release-iphoneos` product, retain the DerivedData path as a fallback, and print discovered `.app` bundles on failure.
+
+CI proof:
+
+- Native workflow run **#9** (`35039268789`) completed successfully on commit `3a0dcfcbecde1f16d0c7865d1ba1b45affeeb81a`.
+- ARM64 configuration and build passed.
+- Bundle verification and unsigned IPA packaging passed.
+- Artifact upload passed.
+- Artifact `Render360-Portal-iOS-unsigned-9` was created, SHA-256 digest `ac6afdd9899ac60bee7ba02909480b94cdd973d478c679ba30f7f046a7e5bd9a`.
+- The retail-data guard passed in the same run.
+
+The signed workflow carries the same corrected product resolver. Signed execution is intentionally not part of Phase 00 because it requires user-supplied Apple signing credentials/profile; that external gate remains in the release/signing phase.
 
 ## Repository/module inventory
 
@@ -181,17 +192,15 @@ UIKit currently owns all interaction and no SDL runtime exists yet. N1 must esta
 
 ### Unsigned workflow
 
-Architecture is correct in principle: macOS runner -> CMake Xcode project -> iphoneos ARM64 Release -> unsigned `.app` -> `Payload/Render360Portal.app` -> IPA artifact. Retail assets are checked before configuration.
-
-Concrete defect found: product-path lookup assumes DerivedData even though the CMake Xcode generator emitted the Release product under `build/ios/Release-iphoneos`. Fix the packaging step to resolve the actual generated product location and fail with useful diagnostics if it cannot be found.
+Architecture is now CI-proven for the bootstrap: macOS runner -> CMake Xcode project -> iphoneos ARM64 Release -> unsigned `.app` -> `Payload/Render360Portal.app` -> IPA artifact. Retail assets are checked before configuration. The workflow verifies the ARM64 executable, bundle metadata, IPA contents, and uploads the result.
 
 ### Signed workflow
 
-The workflow correctly keeps certificate/profile material in GitHub Secrets/variables and a temporary keychain, then manually signs on a macOS runner. It repeats the same incorrect app-product lookup and must use the same robust resolver as the unsigned path. A signed build remains externally blocked until valid Apple signing material and a profile matching the chosen bundle/device are supplied.
+The workflow keeps certificate/profile material in GitHub Secrets/variables and a temporary keychain, then manually signs on a macOS runner. It uses the same robust `.app` resolver as the unsigned workflow. A signed build remains externally blocked until valid Apple signing material and a profile matching the chosen bundle/device are supplied.
 
 ## Retail-data boundary
 
-Phase 00 CI has already demonstrated that no obvious `*.vpk`, `*.bsp`, `*.vtf`, `*.vcs`, or `*.wav` retail files exist under `ios-native/`. Native workflows do not download Portal data. Synthetic fixtures only are permitted in repository tests.
+Phase 00 CI demonstrated that no obvious `*.vpk`, `*.bsp`, `*.vtf`, `*.vcs`, or `*.wav` retail files exist under `ios-native/`. Native workflows do not download Portal data. Synthetic fixtures only are permitted in repository tests.
 
 Future hardening may expand the forbidden-extension scan when new native fixture directories are added, but it must not scan Source-owned open-source code/resources in a way that creates false positives.
 
@@ -199,8 +208,8 @@ Future hardening may expand the forbidden-extension scan when new native fixture
 
 | Phase | Depends on | Current status |
 | --- | --- | --- |
-| 00 Audit/baseline | existing branch | In progress until unsigned IPA artifact is proven after path fix |
-| 01 N0 hardening | 00 | Not started |
+| 00 Audit/baseline | existing branch | **Complete — repo + unsigned CI artifact proven** |
+| 01 N0 hardening | 00 | Next |
 | 02 N1 SDL host | 01 | Not started |
 | 03 N2 Source foundations | 02 | Not started |
 | 04 N2B iOS shims | 03 | Not started |
@@ -262,13 +271,11 @@ Expected Source areas:
 - `vphysics/` plus pinned `ivp` submodule pieces required for the first synthetic physics test
 - a new focused CMake/platform layer under `ios-native/` rather than editing every Source directory indiscriminately
 
-## Phase 00 exit criteria
+## Phase 00 exit criteria — result
 
-Phase 00 is complete only when:
-
-1. this audit is present and points to the exact next native areas;
-2. the known IPA product-path packaging defect is fixed in both native workflows;
-3. a new unsigned native CI run reaches artifact upload with an ARM64 executable;
-4. no retail Portal data is introduced.
+1. **PASS** — this audit is present and points to the exact next native areas.
+2. **PASS** — the IPA product-path packaging defect is fixed in both native workflows.
+3. **PASS** — unsigned native CI run #9 reached artifact upload with an ARM64 executable.
+4. **PASS** — the retail Portal-data guard passed and no retail game data was introduced.
 
 Physical-device launch is intentionally not claimed by Phase 00; that remains an explicit N0/Phase 01 acceptance gate.
