@@ -202,6 +202,18 @@ Module['arguments'].push(
 	'+mat_colorcorrection', '1'
 )
 
+// A phone has no keyboard and iOS has never shipped Pointer Lock, so the
+// engine's own on-screen touch controls are the only way to move or look.
+// They default to off everywhere except Android. Window-only: this file also
+// runs inside every pthread worker.
+if(render360IsWindow) {
+	let coarsePointer = false
+	try { coarsePointer = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches) } catch(_) {}
+	if(navigator.maxTouchPoints > 0 && coarsePointer) {
+		Module['arguments'].push('+touch_enable', '1', '+touch_draw', '1')
+	}
+}
+
 class DataLoader {
 	mapsOrdered = [
 		'background1',

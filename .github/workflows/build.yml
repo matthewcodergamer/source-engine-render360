@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - render360/iphone-baseline
+      - render360/iphone-baseline-lowmem
   pull_request:
     branches:
       - master
@@ -51,7 +51,10 @@ jobs:
           grep -q -- '-sALLOW_MEMORY_GROWTH=1' emscripten/build.sh
           grep -q -- '-sMAXIMUM_MEMORY=1024mb' emscripten/build.sh
           grep -q -- '-sMEMORY_GROWTH_LINEAR_STEP=32mb' emscripten/build.sh
-          grep -q -- '--preload-file' emscripten/build.sh
+          if grep -q -- '--preload-file' emscripten/build.sh; then
+            echo 'Render360 Portal: side modules returned to the MEMFS preload package; they must stay on-demand dlopen.' >&2
+            exit 1
+          fi
           grep -q -- '-lworkerfs.js' emscripten/build.sh
           grep -q -- 'phase3-workerfs.js' emscripten/build.sh
           grep -Fq 'EMCC_FORCE_STDLIBS=libc,libc++,libc++abi' emscripten/build.sh
@@ -145,10 +148,14 @@ jobs:
           test -s build/install/hl2_launcher.html
           test -s build/install/hl2_launcher.js
           test -s build/install/hl2_launcher.wasm
-          test -s build/install/hl2_launcher.data
-          grep -a -q 'hl2_launcher.data' build/install/hl2_launcher.js
-          grep -a -q 'libengine.so' build/install/hl2_launcher.js
-          grep -a -q 'libfilesystem_stdio.so' build/install/hl2_launcher.js
+          # Side modules are fetched by dlopen at runtime, so they must be on disk
+          # next to the page rather than referenced from a preload package.
+          test ! -e build/install/hl2_launcher.data
+          test -s build/install/liblauncher.so
+          test -s build/install/libengine.so
+          test -s build/install/libfilesystem_stdio.so
+          test -s build/install/libclient.so
+          test -s build/install/libserver.so
           grep -a -q 'probable-process-kill-reload' build/install/hl2_launcher.js
           grep -a -q 'render360-direct-vpk' build/install/hl2_launcher.js
           grep -a -q 'WORKERFS' build/install/hl2_launcher.js
@@ -163,7 +170,8 @@ jobs:
           from pathlib import Path
           mib = 1024 * 1024
           wasm = Path('build/install/hl2_launcher.wasm').stat().st_size
-          data = Path('build/install/hl2_launcher.data').stat().st_size
+          data_path = Path('build/install/hl2_launcher.data')
+          data = data_path.stat().st_size if data_path.exists() else 0
           side = sum(p.stat().st_size for p in Path('build/install').glob('*.so'))
           print(f'Render360 deploy sizes: main_wasm={wasm/mib:.1f} MiB data={data/mib:.1f} MiB side_modules={side/mib:.1f} MiB')
           if wasm > 8 * mib:
@@ -286,7 +294,7 @@ jobs:
             "repository": "${GITHUB_REPOSITORY}",
             "commit": "${GITHUB_SHA}",
             "runtimeModel": "pthreads-shared-memory-runtime-dlopen",
-            "sideModuleDelivery": "preloaded-memfs",
+            "sideModuleDelivery": "on-demand-dlopen",
             "initialMemoryMiB": 384,
             "maximumMemoryMiB": 1024,
             "memoryGrowthMiB": 32,
