@@ -63,7 +63,58 @@ AddType application/wasm .wasm
 
 ### GitHub Pages
 
-GitHub Pages cannot set custom headers, so it cannot host this build directly.
+GitHub Pages cannot set response headers, so it cannot make a page cross-origin
+isolated the normal way. The bundle works around it with
+`coi-serviceworker.js`: a service worker adds the headers to responses on their
+way in, so the page ends up isolated anyway. `shell.html` loads it from `<head>`
+and it is copied into the bundle automatically.
+
+Setup:
+
+1. **Settings > Pages > Build and deployment > Source: GitHub Actions.**
+2. Run **Actions > Deploy to GitHub Pages > Run workflow** (it also runs on
+   every push to `master`). You can run it from any branch.
+3. Open the published URL. The first visit registers the worker and reloads
+   once by itself; after that it starts normally.
+
+What to expect:
+
+- One extra page load on the first visit, and again after a hard reload.
+- It needs HTTPS, which GitHub Pages provides.
+- **Safari Private Browsing disables service workers**, so an isolated page is
+  impossible there. The page says so rather than failing silently.
+- A host that sends real headers is still more reliable. Netlify and Cloudflare
+  Pages are both free and read the bundled `_headers` file.
+
+#### Game data does not fit on GitHub Pages
+
+This is the part that usually bites. GitHub refuses any file over 100MB, and
+Pages will not publish a site larger than **1GB**. Git LFS does not help --
+Pages serves the LFS pointer file, not the object. The full set of Portal
+chunks is normally well past that.
+
+So host the engine on Pages and the chunks somewhere else, and point the page at
+them:
+
+```
+https://<user>.github.io/<repo>/?chunks=https://your-host.example/portal/chunks
+```
+
+or edit `index.html` to set `window.CHUNK_BASE_URL` before the engine loads.
+Anywhere works -- a GitHub Release (assets can be up to 2GB each), Cloudflare R2,
+Backblaze B2, any static host. Two requirements for a cross-origin chunk host:
+
+- it must send `Access-Control-Allow-Origin` (CORS), or the browser blocks the
+  request outright;
+- it should send `Cross-Origin-Resource-Policy: cross-origin`. The service
+  worker adds this for you on Pages, but a host with real COEP headers needs it
+  set properly.
+
+If your chunks *do* fit under 1GB, set a `CHUNKS_BASE_URL` repository variable
+(Settings > Secrets and variables > Actions > Variables) and the deploy workflow
+downloads them into the site for you. The workflow fails the build with a clear
+message if the result exceeds the 1GB limit, rather than letting the deploy fail
+mysteriously.
 
 ## Playing on iPhone / iPad
 

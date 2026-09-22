@@ -37,6 +37,29 @@ if (isMainThread) {
 	}
 }
 
+// Where the packed map data lives. It defaults to ./chunks next to the page,
+// but the whole game is far too big for some hosts -- GitHub Pages caps a
+// published site at 1GB and GitHub refuses any file over 100MB -- so the data
+// often has to live somewhere else. Point at it with ?chunks=<url>, or set
+// window.CHUNK_BASE_URL before the engine loads.
+//
+// A cross-origin host must send CORS headers, or the browser blocks the
+// request before the data ever arrives.
+function chunkBaseUrl() {
+	if (!isMainThread) return 'chunks'
+
+	try {
+		const fromQuery = new URLSearchParams(window.location.search).get('chunks')
+		if (fromQuery) return fromQuery.replace(/\/+$/, '')
+	} catch (e) { /* malformed query string; fall through */ }
+
+	if (typeof window.CHUNK_BASE_URL === 'string' && window.CHUNK_BASE_URL) {
+		return window.CHUNK_BASE_URL.replace(/\/+$/, '')
+	}
+
+	return 'chunks'
+}
+
 class DataLoader {
 	mapsOrdered = [
 		'background1',
@@ -135,8 +158,8 @@ class DataLoader {
 			// A 404 still fires onload. Parsing an error page as chunk data
 			// walks off the end of the buffer and takes the engine with it.
 			if(xhr.status !== 200 && xhr.status !== 0) {
-				reject(new Error(`cannot load map ${mapName}: HTTP ${xhr.status}. ` +
-					`Did you put the packed chunks in ./chunks/?`))
+				reject(new Error(`cannot load map ${mapName}: HTTP ${xhr.status} ` +
+					`from ${chunkBaseUrl()}/${mapName}.data`))
 				return
 			}
 
@@ -187,7 +210,7 @@ class DataLoader {
 		}
 
 		try {
-			xhr.open('GET', `chunks/${mapName}.data`, true)
+			xhr.open('GET', `${chunkBaseUrl()}/${mapName}.data`, true)
 			xhr.send()
 		} catch(err) {
 			reject(err)

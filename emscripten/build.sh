@@ -64,6 +64,15 @@ cp emscripten/_headers build/install/
 cp emscripten/fetch_chunks.py build/install/
 cp emscripten/pre.js build/install/   # fetch_chunks.py reads the map list from it
 
+# Required on hosts that cannot send COOP/COEP themselves, GitHub Pages above
+# all. shell.html loads it from <head>; without it there is no SharedArrayBuffer
+# and the engine never starts.
+cp emscripten/coi-serviceworker.js build/install/
+
+# Stops GitHub Pages running the output through Jekyll, which would drop files
+# and directories whose names begin with an underscore.
+touch build/install/.nojekyll
+
 # The entry point is hl2_launcher.html; give the directory root an index so
 # opening the bundle just works.
 cat > build/install/index.html <<'HTML'

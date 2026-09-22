@@ -34,11 +34,27 @@ Or build the chunks from your own Portal install with `emscripten/repackage.js`
 optional: the engine uses threads, threads need `SharedArrayBuffer`, and browsers
 only hand one out to a page sending `Cross-Origin-Opener-Policy` and
 `Cross-Origin-Embedder-Policy`. Opening `hl2_launcher.html` as a `file://` URL
-will not work, and **GitHub Pages cannot host this** -- it cannot set headers.
+will never work.
 
 ```sh
 python3 serve.py --dir .
 # http://localhost:8080/
+```
+
+### GitHub Pages
+
+Pages cannot send those headers, so the bundle ships `coi-serviceworker.js`,
+which installs them from a service worker instead. Set **Settings > Pages >
+Source** to **GitHub Actions**, then run **Actions > Deploy to GitHub Pages**.
+The first visit reloads itself once to pick the worker up.
+
+The catch is size, not headers: GitHub blocks files over 100MB and will not
+publish a Pages site over 1GB, so the game data usually has to live elsewhere.
+Host the chunks anywhere (a GitHub Release, R2, any static host) and point at
+them:
+
+```
+https://<user>.github.io/<repo>/?chunks=https://your-host.example/portal/chunks
 ```
 
 Then open it, tap/click **Tap to play**, and use the main menu to start a new

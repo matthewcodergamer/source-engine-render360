@@ -19,6 +19,12 @@
     <link rel="apple-touch-icon" href="assets/portal.svg">
 
     <title>yikes!</title>
+
+    <!-- Must run before anything else. On a host that cannot send COOP/COEP
+         (GitHub Pages), this registers a service worker that adds them and
+         reloads once, which is the only way to get SharedArrayBuffer there. -->
+    <script src="coi-serviceworker.js"></script>
+
     <style>{{{ SHELL_CSS }}}</style>
     <style>
       :root { color-scheme: dark; }
@@ -295,15 +301,25 @@
         }
 
         if (typeof SharedArrayBuffer === 'undefined' || !self.crossOriginIsolated) {
+          var coi = window.coiServiceWorker || { state: 'idle', reason: '' };
+
+          // The service worker is mid-flight: it is about to reload the page,
+          // and the reload comes back isolated. Not an error, just a wait.
+          if (coi.reloading || coi.state === 'registering') {
+            return { ok: false, pending: true, title: 'Preparing...',
+                     detail: 'Setting up cross-origin isolation. The page will reload by itself.' };
+          }
+
           return { ok: false, title: 'Page is not cross-origin isolated',
                    detail: 'The engine is built with threads, which need SharedArrayBuffer. ' +
                            'SharedArrayBuffer is only handed out to a cross-origin isolated page, so the server must send:\n\n' +
                            '  Cross-Origin-Opener-Policy: same-origin\n' +
                            '  Cross-Origin-Embedder-Policy: require-corp\n\n' +
-                           'crossOriginIsolated is currently ' + self.crossOriginIsolated + '.\n' +
-                           'Run emscripten/serve.py to serve the build locally with the right headers, ' +
-                           'or deploy the included _headers file. Note that this also requires HTTPS ' +
-                           '(or localhost) -- plain http:// on a phone will never work.' };
+                           'crossOriginIsolated is currently ' + self.crossOriginIsolated + '.\n\n' +
+                           (coi.reason ? 'Service worker fallback: ' + coi.reason + '\n\n' : '') +
+                           'On a host that cannot set headers (GitHub Pages), coi-serviceworker.js ' +
+                           'must be served next to this page. Otherwise run serve.py, or deploy the ' +
+                           'included _headers file. Either way the page must be on HTTPS or localhost.' };
         }
 
         var gl = null;
@@ -331,7 +347,14 @@
       // post.js reads this; it runs inside the module scope and can hold main()
       // back with a run dependency, which we cannot reach from out here.
       GameHost.supported = support.ok;
-      if (!support.ok) showFatal(support.title, support.detail);
+      if (!support.ok) {
+        if (support.pending) {
+          // A reload is already on its way; show progress, not a failure.
+          statusElement.textContent = support.detail;
+        } else {
+          showFatal(support.title, support.detail);
+        }
+      }
 
       // --- canvas sizing ----------------------------------------------------
       // Rendering an iPhone's native 3x pixel grid means ~3.5M pixels per frame,
