@@ -554,7 +554,13 @@ def configure(conf):
 
 		flags += ['-sSHARED_MEMORY=1', '-msimd128', '-msse']
 		flags += ['-sUSE_BZIP2=1', '-sUSE_SDL=2', '-sUSE_FREETYPE=1', '-sUSE_LIBJPEG=1', '-sUSE_LIBPNG']
-		linkflags += ['-sSIDE_MODULE=1', '-Wl,--allow-multiple-definition']
+		# SIDE_MODULE=1 exports every symbol and keeps every function, so no dead
+		# code is ever dropped from a module. The tree already builds with
+		# -fvisibility=hidden and marks its real exports DLL_EXPORT (that is how the
+		# native .so files work), so SIDE_MODULE=2 can honour that and let wasm-ld
+		# garbage-collect the rest. Less code is less for iPhone Safari to compile
+		# and hold in memory, which is where the web build currently dies.
+		linkflags += ['-sSIDE_MODULE=2', '-Wl,--allow-multiple-definition']
 		flags += ['-sFULL_ES3', '-sMALLOC=mimalloc']
 
 	if conf.env.DEST_OS == 'freebsd':
