@@ -55,5 +55,23 @@ emcc \
 
 cp build/launcher_main/hl2_launcher.* build/install/
 cp -r emscripten/assets build/install/
+
+# Ship the pieces needed to actually run the bundle, so the CI artifact is
+# self-contained: a dev server that sends the cross-origin isolation headers,
+# the same headers for static hosts, and the game-data fetcher.
 cp emscripten/serve.py build/install/
 cp emscripten/_headers build/install/
+cp emscripten/fetch_chunks.py build/install/
+cp emscripten/pre.js build/install/   # fetch_chunks.py reads the map list from it
+
+# The entry point is hl2_launcher.html; give the directory root an index so
+# opening the bundle just works.
+cat > build/install/index.html <<'HTML'
+<!DOCTYPE html>
+<meta charset="utf-8">
+<title>yikes!</title>
+<meta http-equiv="refresh" content="0; url=hl2_launcher.html">
+<link rel="canonical" href="hl2_launcher.html">
+<body style="background:#000;color:#eee;font-family:system-ui;text-align:center;padding-top:20vh">
+<p><a href="hl2_launcher.html" style="color:#7ad">Loading...</a></p>
+HTML

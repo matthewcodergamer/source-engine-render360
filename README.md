@@ -11,14 +11,44 @@
 
 ## running it
 
-The page **must** be served cross-origin isolated (`Cross-Origin-Opener-Policy`
-+ `Cross-Origin-Embedder-Policy`) over HTTPS or localhost, otherwise there is no
-`SharedArrayBuffer` and the threaded build never starts:
+Pushing to GitHub is enough to **build** it -- the `Build` workflow compiles the
+wasm bundle and uploads `release.zip` -- but a build on its own is not a playable
+game. Three things have to come together:
+
+**1. Get the engine.** Open the repo's Actions tab, pick the latest green `Build`
+run, and download the `release.zip` artifact. Unzip it.
+
+**2. Add the game data.** The zip contains the engine and *no* Portal content.
+The engine fetches `chunks/<map>.data` at runtime; without those files the page
+stops with "Could not load game data". You need to own Portal.
 
 ```sh
-python3 emscripten/serve.py --dir build/install
-# http://localhost:8080/hl2_launcher.html
+cd <unzipped release.zip>
+python3 fetch_chunks.py --dir .
 ```
+
+Or build the chunks from your own Portal install with `emscripten/repackage.js`
+(see [packing game data](#packing-game-data)).
+
+**3. Serve it cross-origin isolated, over HTTPS or localhost.** This is not
+optional: the engine uses threads, threads need `SharedArrayBuffer`, and browsers
+only hand one out to a page sending `Cross-Origin-Opener-Policy` and
+`Cross-Origin-Embedder-Policy`. Opening `hl2_launcher.html` as a `file://` URL
+will not work, and **GitHub Pages cannot host this** -- it cannot set headers.
+
+```sh
+python3 serve.py --dir .
+# http://localhost:8080/
+```
+
+Then open it, tap/click **Tap to play**, and use the main menu to start a new
+game. If something is missing, the page now says what on screen rather than
+showing a black screen.
+
+To play on an actual iPhone you need an HTTPS address, so put the server behind
+a tunnel (`cloudflared tunnel --url http://localhost:8080`) or deploy to a host
+that respects the bundled `_headers` file, such as Netlify or Cloudflare Pages.
+Full details in [emscripten/README-hosting.md](emscripten/README-hosting.md).
 
 ## phones (iPhone / iPad / Android)
 
@@ -68,6 +98,7 @@ then download packed game data (yikes.pw/portal/chunks/mapName.data for each map
 specific target.
 
 ## packing game data
+<a id="packing-game-data"></a>
 first of all, you'll need to build engine from https://github.com/nillerusr/source-engine for your native arch
 
 and after that you should add that printf to ./filesystem/basefilesystem.cpp, to dump all files that engine would access (textures/models that map needs)
