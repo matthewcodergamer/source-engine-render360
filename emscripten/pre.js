@@ -273,7 +273,10 @@ Module['arguments'].push(
 	'-threads', '1',
 	'+mat_queue_mode', '0',
 	// Never open the developer console on its own.
-	'-hideconsole'
+	'-hideconsole',
+	// The canvas rarely holds DOM focus in a browser, and Source would mute
+	// itself whenever it believes the window is in the background.
+	'+snd_mute_losefocus', '0'
 )
 
 // A phone has no keyboard and iOS has never shipped Pointer Lock, so the
@@ -877,4 +880,115 @@ if(render360IsWindow && !render360ProbableProcessReload) {
 			.catch(error => Module.printErr?.(`[Render360] support files failed: ${error?.stack || error}`))
 			.finally(() => removeRunDependency('render360-support-files'))
 	})
+}
+
+// ---------------------------------------------------------------------------
+// Game audio.
+//
+// engine/audio/snd_dev_sdl.cpp (web build) mixes into its usual ring buffer
+// in shared Wasm memory and hands us its address, the byte offset of its
+// read cursor (m_readPos) and its pause counter. An AudioWorklet on the
+// browser's audio thread plays the ring and advances m_readPos, which is what
+// SDL's callback did on desktop; the mixer keeps painting ahead of it.
+// iOS only starts audio from a user gesture, so the first tap resumes it, and
+// the audio session is "playback" so the ringer switch does not mute the game.
+if(render360IsWindow) {
+	const WORKLET = `
+	class Render360Ring extends AudioWorkletProcessor {
+		constructor() {
+			super();
+			this.c = null;
+			this.frac = 0;
+			this.port.onmessage = (e) => {
+				const d = e.data || {};
+				if (d.stop) { this.c = null; return; }
+				this.c = d;
+				this.i16 = new Int16Array(d.sab);
+				this.i32 = new Int32Array(d.sab);
+				this.frac = 0;
+			};
+		}
+		process(inputs, outputs) {
+			const out = outputs[0];
+			const L = out[0], R = out[1] || out[0];
+			const c = this.c;
+			if (!c || Atomics.load(this.i32, c.pauseIdx) > 0) {
+				L.fill(0); if (R !== L) R.fill(0);
+				return true;
+			}
+			const frames = c.bytes >> 2;
+			const base = c.buf >> 1;
+			const step = c.rate / sampleRate;
+			let pos = Atomics.load(this.i32, c.readIdx);
+			if (pos < 0 || pos >= c.bytes) pos = 0;
+			let frame = pos >> 2;
+			let frac = this.frac;
+			for (let i = 0; i < L.length; i++) {
+				const next = frame + 1 === frames ? 0 : frame + 1;
+				const a = base + frame * 2, b = base + next * 2;
+				const l0 = this.i16[a], r0 = this.i16[a + 1];
+				L[i] = (l0 + (this.i16[b] - l0) * frac) / 32768;
+				if (R !== L) R[i] = (r0 + (this.i16[b + 1] - r0) * frac) / 32768;
+				frac += step;
+				const whole = frac | 0;
+				frac -= whole;
+				frame = (frame + whole) % frames;
+			}
+			this.frac = frac;
+			Atomics.store(this.i32, c.readIdx, frame << 2);
+			return true;
+		}
+	}
+	registerProcessor('render360-ring', Render360Ring);
+	`
+
+	let audio = null   // { ctx, node, ready }
+
+	function resumeAudio() {
+		const ctx = audio?.ctx
+		if(!ctx || ctx.state === 'running') return
+		ctx.resume().catch(() => {})
+	}
+	for(const type of ['pointerdown', 'touchend', 'keydown', 'click']) {
+		document.addEventListener(type, resumeAudio, { capture: true, passive: true })
+	}
+	document.addEventListener('visibilitychange', () => {
+		if(!audio?.ctx) return
+		if(document.hidden) audio.ctx.suspend().catch(() => {})
+		else resumeAudio()
+	})
+
+	Module.render360AudioStart = (buf, bytes, readPosPtr, pausePtr, rate) => {
+		try { if(navigator.audioSession) navigator.audioSession.type = 'playback' } catch(_) {}
+		const sab = (typeof wasmMemory !== 'undefined' && wasmMemory) ? wasmMemory.buffer : HEAP8.buffer
+		const config = { sab, buf, bytes, readIdx: readPosPtr >> 2, pauseIdx: pausePtr >> 2, rate }
+		const AC = window.AudioContext || window.webkitAudioContext
+		if(!AC) { Module.printErr?.('[Render360 audio] Web Audio unavailable'); return }
+		let ctx
+		try { ctx = new AC({ sampleRate: rate, latencyHint: 'interactive' }) } catch(_) { ctx = new AC() }
+		audio = { ctx, node: null }
+		resumeAudio()
+		if(ctx.audioWorklet && typeof AudioWorkletNode === 'function') {
+			const url = URL.createObjectURL(new Blob([WORKLET], { type: 'text/javascript' }))
+			ctx.audioWorklet.addModule(url).then(() => {
+				URL.revokeObjectURL(url)
+				if(audio?.ctx !== ctx) return
+				const node = new AudioWorkletNode(ctx, 'render360-ring', { numberOfInputs: 0, outputChannelCount: [2] })
+				node.port.postMessage(config)
+				node.connect(ctx.destination)
+				audio.node = node
+				Module.print?.(`[Render360 audio] playing ${bytes}-byte ring at ${rate} Hz through AudioWorklet (output ${ctx.sampleRate} Hz, ${ctx.state})`)
+			}).catch(error => Module.printErr?.(`[Render360 audio] worklet failed: ${error?.message || error}`))
+		} else {
+			Module.printErr?.('[Render360 audio] AudioWorklet unavailable; no game audio')
+		}
+	}
+
+	Module.render360AudioStop = () => {
+		if(!audio) return
+		try { audio.node?.port.postMessage({ stop: true }) } catch(_) {}
+		try { audio.node?.disconnect() } catch(_) {}
+		try { audio.ctx.close() } catch(_) {}
+		audio = null
+	}
 }
