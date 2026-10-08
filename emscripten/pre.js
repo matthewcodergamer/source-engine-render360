@@ -451,3 +451,73 @@ Module.downloadMap = (lock, mapName) => {
 		Atomics.notify(HEAP32, lock)
 	})
 }
+// --- On-demand engine modules ----------------------------------------------
+// The side modules are not preloaded (that kept ~37 MiB of .so bytes resident
+// for the whole page). Sys_LoadModule asks for each one just before dlopen and
+// waits; we fetch it plus everything it lists as DT_NEEDED into MEMFS at "/",
+// where the old preload put them. dlopen needs the file in MEMFS: that is how
+// it hands the bytes to the other threads (dso->file_data), and without it
+// Emscripten aborts the page.
+function render360NeededLibs(bytes) {
+	const out = []
+	if(bytes.length < 8 || bytes[0] !== 0 || bytes[1] !== 0x61 || bytes[2] !== 0x73 || bytes[3] !== 0x6d) return out
+	let i = 8
+	const uleb = () => {
+		let result = 0, shift = 0, byte
+		do { byte = bytes[i++]; result += (byte & 0x7f) * 2 ** shift; shift += 7 } while(byte & 0x80)
+		return result
+	}
+	const decoder = new TextDecoder()
+	// dylink.0 is always the first section of a side module.
+	if(bytes[i++] !== 0) return out
+	const end = uleb() + i
+	const nameLen = uleb()
+	const name = decoder.decode(bytes.subarray(i, i + nameLen))
+	i += nameLen
+	if(name !== 'dylink.0') return out
+	while(i < end) {
+		const sub = bytes[i++]
+		const subEnd = uleb() + i
+		if(sub === 2) {   // WASM_DYLINK_NEEDED
+			let count = uleb()
+			while(count--) {
+				const len = uleb()
+				out.push(decoder.decode(bytes.subarray(i, i + len)))
+				i += len
+			}
+		}
+		i = subEnd
+	}
+	return out
+}
+
+async function render360EnsureModuleFile(name, seen) {
+	if(seen.has(name)) return
+	seen.add(name)
+	const path = '/' + name
+	try { FS.stat(path); return } catch(_) {}
+
+	globalThis.render360SetPhase?.(`module-fetch:${name}`)
+	const response = await fetch(name, { credentials: 'same-origin' })
+	if(!response.ok) throw new Error(`HTTP ${response.status} for ${name}`)
+	const bytes = new Uint8Array(await response.arrayBuffer())
+	const needed = render360NeededLibs(bytes)
+	FS.writeFile(path, bytes)
+	for(const dep of needed) await render360EnsureModuleFile(dep, seen)
+}
+
+Module.render360FetchModule = (lock, name) => {
+	const release = () => {
+		Atomics.store(HEAP32, lock, 0)
+		Atomics.notify(HEAP32, lock)
+	}
+	render360EnsureModuleFile(String(name), new Set()).then(release, error => {
+		// Never leave the engine thread parked: release it and let dlopen
+		// report the missing module through Source's own error path.
+		Module.printErr?.(`[Render360] module fetch failed for ${name}: ${error?.stack || error}`)
+		release()
+	})
+}
+
+// Exposed for tests.
+globalThis.render360NeededLibs = render360NeededLibs

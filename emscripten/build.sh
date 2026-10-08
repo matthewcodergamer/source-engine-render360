@@ -19,6 +19,11 @@ import re
 
 path = Path('tier1/interface.cpp')
 text = path.read_text()
+if '#include <emscripten.h>' not in text:
+    inc = '#include "tier0/threadtools.h"\n'
+    if inc not in text:
+        raise SystemExit('Render360 Portal: interface.cpp include anchor moved')
+    text = text.replace(inc, inc + '#ifdef __EMSCRIPTEN__\n#include <emscripten.h>\n#endif\n', 1)
 pattern = re.compile(
     r'(CSysModule \*Sys_LoadModule\( const char \*pModuleName, Sys_Flags flags /\* = SYS_NOFLAGS \(0\) \*/ \)\n\{\n\tHMODULE hDLL = NULL;\n\n)'
     r'#ifdef __EMSCRIPTEN__\n.*?\n#else\n',
@@ -57,6 +62,29 @@ replacement = r'''\1#ifdef __EMSCRIPTEN__
 			Msg("Render360: optional browser module skipped: %s\n", szModuleName);
 			return reinterpret_cast<CSysModule *>(hDLL);
 		}
+	}
+
+	// Emscripten only shares a dlopen'd module with the other threads when
+	// the file is in the virtual filesystem: dlopen copies it into linear
+	// memory (dso->file_data) and every other thread instantiates from that
+	// copy. Fetched any other way, the other threads fail to load it and
+	// Emscripten aborts (ABORT_ON_SYNC_FAILURE). The modules are no longer
+	// preloaded, so ask the main thread to put this one -- and the modules it
+	// depends on -- into MEMFS first, and wait for it. Same handshake as the
+	// map download in FindMap.
+	{
+		int render360ModuleLock = 1;
+		int render360Requested = EM_ASM_INT({
+			if (typeof ENVIRONMENT_IS_PTHREAD === 'undefined' || !ENVIRONMENT_IS_PTHREAD) return 0;
+			postMessage({
+				cmd: 'callHandler',
+				handler: 'render360FetchModule',
+				args: [ $0 / 4, UTF8ToString($1) ]
+			});
+			return 1;
+		}, &render360ModuleLock, szModuleName);
+		if(render360Requested)
+			__builtin_wasm_memory_atomic_wait32(&render360ModuleLock, 1, -1);
 	}
 
 	Msg("LoadLibrary: path: %s\n", szModuleName);
