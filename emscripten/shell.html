@@ -327,7 +327,10 @@
         if (/filesystem BaseDir|IDirect3DDevice9::Create|create-ready:shaderapi|Precache:/i.test(line)) {
           render360HideSplash(1500);
         }
-        if (line.indexOf('[Render360 iOS guard]') >= 0) {
+        if (line.indexOf('[Render360 WebGL] context lost') >= 0) {
+          render360ShowFailure('iPhone ran out of graphics memory',
+            'iOS took the graphics context away while Portal was loading textures. Close other tabs and apps, then open Portal again. Copy diagnostics helps tune the next build.');
+        } else if (line.indexOf('[Render360 iOS guard]') >= 0) {
           render360ShowFailure('Safari ran out of memory',
             'iOS closed the game to free memory, so it was stopped instead of restarting in a loop. Close other tabs and apps, then open Portal again.');
         } else if (/Aborted\(|native code called abort|RuntimeError:/i.test(line)) {

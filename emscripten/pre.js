@@ -138,7 +138,25 @@ globalThis.render360MemorySnapshot = (phase) => {
 // Worker-side phase changes matter most for PROXY_TO_PTHREAD. Relay them to
 // the Window so localStorage still contains the latest worker phase if WebKit
 // kills the process and reloads the launcher.
+// Lets a Worker put a line into the window's engine log (and so into the
+// diagnostics tail and the shell's failure detection). A Worker's own
+// Module.printErr only reaches its console.
+function render360Log(text) {
+	if(render360IsWindow) {
+		try { Module.printErr?.(text) } catch(_) {}
+		return
+	}
+	try { console.error(text) } catch(_) {}
+	try { render360CrashChannel?.postMessage({ type: 'render360-log', launchId: render360LaunchId, text: String(text) }) } catch(_) {}
+}
+globalThis.render360Log = render360Log
+
 if(render360IsWindow && render360CrashChannel) {
+	render360CrashChannel.addEventListener('message', event => {
+		if(event?.data?.type === 'render360-log' && event.data.launchId === render360LaunchId) {
+			try { Module.printErr?.(String(event.data.text || '')) } catch(_) {}
+		}
+	})
 	render360CrashChannel.addEventListener('message', event => {
 		const incoming = event?.data?.type === 'render360-crash-state' ? event.data.state : null
 		if(!incoming || incoming.launchId !== render360LaunchId) return
@@ -260,6 +278,21 @@ if(render360IsWindow) {
 		// see, and textures are the largest thing a map load adds to both the
 		// Wasm heap and GPU memory, which is where iOS kills the page.
 		Module['arguments'].push('+mat_picmip', '2')
+		// Graphics memory is the next limit after the Wasm heap: the first
+		// iPhone run that reached the menu lost its WebGL context while the
+		// engine was caching materials. Normal maps double the texture memory
+		// of almost every Portal surface, specular cubemaps and shadow render
+		// targets add more, and none of it is worth a lost context on a phone.
+		Module['arguments'].push(
+			'+mat_bumpmap', '0',
+			'+mat_specular', '0',
+			'+r_shadowrendertotexture', '0',
+			'+r_flashlightdepthtexture', '0',
+			'+r_waterforceexpensive', '0',
+			'+mat_reducefillrate', '1',
+			'+mat_antialias', '0',
+			'+mat_forceaniso', '0'
+		)
 	}
 
 	// Render at the shape of the screen, so the game fills it edge to edge
@@ -700,3 +733,52 @@ if(render360IsWindow && !render360ProbableProcessReload) {
 			.finally(() => removeRunDependency('render360-precompile-modules'))
 	})
 }
+
+// ---------------------------------------------------------------------------
+// WebGL context loss.
+//
+// The context lives on the engine's pthread (OffscreenCanvas), so the shell's
+// listener on the page canvas never fires. When iOS reclaims GPU memory it
+// loses the context; createShader() then returns null and ToGL's compile-error
+// path calls getShaderInfoLog(null), which throws a TypeError that hides the
+// real cause. Report the loss itself, and make the info-log getters tolerate a
+// null object so the report is what the player sees.
+;(() => {
+	const GL2 = typeof WebGL2RenderingContext !== 'undefined' ? WebGL2RenderingContext : null
+	if(!GL2) return
+	let reported = false
+	function reportLost(where, ctx) {
+		if(reported) return
+		reported = true
+		let lost = false
+		try { lost = !!ctx?.isContextLost?.() } catch(_) {}
+		const text = lost
+			? `[Render360 WebGL] context lost (${where}): iOS reclaimed graphics memory`
+			: `[Render360 WebGL] null object passed to ${where} while the context is alive`
+		try { render360SetPhase(lost ? `webgl-context-lost:${where}` : `webgl-null-object:${where}`) } catch(_) {}
+		render360Log(text)
+	}
+	for(const name of ['getShaderInfoLog', 'getProgramInfoLog']) {
+		const original = GL2.prototype[name]
+		if(typeof original !== 'function') continue
+		GL2.prototype[name] = function(object) {
+			if(!object) { reportLost(name, this); return '' }
+			return original.call(this, object)
+		}
+	}
+	const Canvas = typeof OffscreenCanvas !== 'undefined' ? OffscreenCanvas : null
+	if(Canvas && typeof Canvas.prototype.getContext === 'function') {
+		const getContext = Canvas.prototype.getContext
+		Canvas.prototype.getContext = function(type, attributes) {
+			const ctx = getContext.call(this, type, attributes)
+			if(ctx && /webgl/i.test(String(type)) && !this.render360LossHooked) {
+				this.render360LossHooked = true
+				this.addEventListener('webglcontextlost', event => {
+					reportLost('webglcontextlost', ctx)
+					try { event.preventDefault() } catch(_) {}
+				})
+			}
+			return ctx
+		}
+	}
+})()
