@@ -1,0 +1,386 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#0b0d10">
+  <title>Render360 · Portal iPhone baseline</title>
+  <style>
+    :root{color-scheme:dark;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif}
+    *{box-sizing:border-box}body{margin:0;min-height:100vh;background:#0b0d10;color:#f4f7fb}
+    main{width:min(760px,100%);margin:0 auto;padding:max(24px,env(safe-area-inset-top)) 18px max(42px,env(safe-area-inset-bottom))}
+    h1{margin:0 0 8px;font-size:30px;letter-spacing:-.035em}.sub{margin:0 0 22px;color:#aeb8c6;line-height:1.45}
+    .card{background:rgba(255,255,255,.055);border:1px solid rgba(255,255,255,.09);border-radius:18px;padding:16px;margin:12px 0;backdrop-filter:blur(20px)}
+    .row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 0;border-bottom:1px solid rgba(255,255,255,.07)}.row:last-child{border-bottom:0}
+    .name{color:#dce3ec}.value{text-align:right;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;max-width:58%;overflow-wrap:anywhere}.ok{color:#65e28a}.bad{color:#ff7777}.warn{color:#ffd36d}
+    button,.fileButton{appearance:none;border:0;border-radius:13px;padding:13px 15px;background:#f4f7fb;color:#11151a;font-weight:700;font-size:15px;cursor:pointer}
+    button.secondary,.fileButton.secondary{background:rgba(255,255,255,.09);color:#f4f7fb;border:1px solid rgba(255,255,255,.09)}button:disabled{opacity:.4;cursor:default}
+    .actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:14px}input[type=file]{display:none}.small{color:#95a1b0;font-size:13px;line-height:1.5}
+    progress{width:100%;height:10px;margin-top:12px;accent-color:#f4f7fb}
+    code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.sourceBadge{font-weight:750}
+    #logSummary{margin:10px 0 0;min-height:1.5em;overflow-wrap:anywhere}
+  </style>
+</head>
+<body>
+<main>
+  <h1>Portal upstream baseline</h1>
+  <p class="sub">The Source runtime still asks for its original <code>chunks/&lt;map&gt;.data</code> path. Render360 now has two data paths: use the original packed host when it works, or automatically build compatible chunks from your own Portal VPKs when it does not.</p>
+
+  <section class="card">
+    <div class="row"><span class="name">Secure context</span><span id="secure" class="value">checking…</span></div>
+    <div class="row"><span class="name">Service worker</span><span id="sw" class="value">checking…</span></div>
+    <div class="row"><span class="name">crossOriginIsolated</span><span id="coi" class="value">checking…</span></div>
+    <div class="row"><span class="name">SharedArrayBuffer</span><span id="sab" class="value">checking…</span></div>
+    <div class="row"><span class="name">Wasm shared memory</span><span id="wasmThreads" class="value">checking…</span></div>
+    <div class="row"><span class="name">OffscreenCanvas</span><span id="offscreen" class="value">checking…</span></div>
+    <div class="row"><span class="name">WebGL2</span><span id="webgl2" class="value">checking…</span></div>
+    <div class="row"><span class="name">Runtime files</span><span id="runtime" class="value">checking…</span></div>
+    <div class="row"><span class="name">Portal ownership proof</span><span id="ownership" class="value">not verified</span></div>
+    <div class="row"><span class="name">Runtime chunk source</span><span id="chunk" class="value">checking…</span></div>
+  </section>
+
+  <section class="card">
+    <strong>Verify your Portal copy</strong>
+    <p class="small">Choose the full Portal folder containing <code>portal/</code>, <code>hl2/</code>, <code>platform/</code> and the VPK files. Safari inspects the selected files locally. Nothing from your game folder is uploaded to GitHub.</p>
+    <div class="actions">
+      <label class="fileButton" for="ownershipFolder">Choose Portal folder</label>
+      <input id="ownershipFolder" type="file" webkitdirectory directory multiple>
+      <label class="fileButton secondary" for="ownershipFiles">Files / ZIP fallback</label>
+      <input id="ownershipFiles" type="file" accept=".zip,.vpk,.txt,application/zip,application/octet-stream" multiple>
+      <button id="clearOwnership" class="secondary" type="button">Clear verification</button>
+    </div>
+    <div id="ownershipStatus" class="small" style="margin-top:12px"></div>
+  </section>
+
+  <section class="card">
+    <strong>Dual runtime data</strong>
+    <p class="small">Render360 first checks the original Portal web-port data path. If Safari cannot read it, the selected Portal folder becomes the fallback source: the browser parses your <code>*_dir.vpk</code> indexes, reads only needed file ranges with <code>File.slice()</code>, packs them into the same upstream <code>.data</code> record format, and stores the generated chunks in this browser's Cache Storage.</p>
+    <div class="row"><span class="name">Original host</span><span id="upstreamStatus" class="value">checking…</span></div>
+    <div class="row"><span class="name">Local VPK fallback</span><span id="localStatus" class="value">not prepared</span></div>
+    <div class="actions">
+      <button id="retryChunk" class="secondary" type="button">Retry original host</button>
+      <button id="buildLocal" class="secondary" type="button" disabled>Build local VPK fallback</button>
+      <button id="clearLocal" class="secondary" type="button">Clear local fallback</button>
+    </div>
+    <progress id="localProgress" max="1" value="0" hidden></progress>
+    <div id="localProgressText" class="small" style="margin-top:8px"></div>
+  </section>
+
+  <section class="card">
+    <strong>Run</strong>
+    <p id="launchHint" class="small">Checking whether the threaded runtime can start…</p>
+    <div class="row"><span class="name">Last runtime</span><span id="lastRuntime" class="value">none recorded</span></div>
+    <div class="actions">
+      <button id="launch" type="button" disabled>Launch upstream baseline</button>
+      <button id="reload" class="secondary" type="button">Reload isolation</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <strong>Diagnostics</strong>
+    <p id="logSummary" class="small">Only the latest staging event is retained; completed steps are discarded.</p>
+    <div class="actions">
+      <button id="copyLog" class="secondary" type="button">Copy diagnostics</button>
+      <button id="clearLog" class="secondary" type="button">Clear latest event</button>
+    </div>
+  </section>
+</main>
+<script src="./portal-local-vpk.js"></script>
+<script>
+(() => {
+  'use strict';
+  const OWNERSHIP_KEY='render360PortalOwnershipVerified';
+  const CRASH_STATE_KEY='render360-ios-crash-state-v2';
+  const $=id=>document.getElementById(id);
+  const LOG_MAX_CHARS=4096;
+  let latestLogLine='';
+  let selectedPortalFiles=[];
+  let selectedFromFolder=false;
+  let buildingLocal=false;
+  let lastChunkProbe={ok:false,source:'unavailable'};
+
+  const safeString=x=>{
+    if(typeof x==='string')return x;
+    try{return JSON.stringify(x)}catch(_){return String(x)}
+  };
+  const appendLogLine=line=>{
+    line=String(line||'');
+    if(line.length>LOG_MAX_CHARS)line=line.slice(-LOG_MAX_CHARS);
+    latestLogLine=line;
+  };
+  const logText=()=>latestLogLine;
+  const log=(...args)=>{
+    const line=args.map(safeString).join(' ');
+    appendLogLine(line);
+    const summary=$('logSummary');
+    if(summary)summary.textContent=line.length>220?line.slice(0,217)+'…':line;
+  };
+  const set=(id,ok,text,warning=false)=>{
+    const el=$(id);el.textContent=text;el.className='value '+(ok?'ok':warning?'warn':'bad');
+  };
+  const readCrashState=()=>{
+    try{return JSON.parse(localStorage.getItem(CRASH_STATE_KEY)||'null')}catch(_){return null}
+  };
+  const markManualRelaunch=()=>{
+    const state=readCrashState();
+    if(!state)return;
+    state.active=false;state.blocked=false;state.phase='manual-relaunch';state.updatedAt=Date.now();
+    try{localStorage.setItem(CRASH_STATE_KEY,JSON.stringify(state))}catch(_){}
+  };
+  const updateLastRuntime=()=>{
+    const state=readCrashState();
+    if(!state){set('lastRuntime',false,'none recorded',true);return}
+    const phase=String(state.phase||'unknown');
+    const when=Number(state.updatedAt||0);
+    const stamp=when?new Date(when).toLocaleTimeString():'';
+    if(state.active===true)set('lastRuntime',false,`interrupted · ${phase}${stamp?' · '+stamp:''}`,true);
+    else set('lastRuntime',true,`${phase}${stamp?' · '+stamp:''}`);
+  };
+  const diagnosticText=()=>{
+    const state=readCrashState();
+    return [
+      'Render360 Portal staging diagnostics',
+      'captured='+new Date().toISOString(),
+      'url='+location.href,
+      'crossOriginIsolated='+String(window.crossOriginIsolated===true),
+      'SharedArrayBuffer='+typeof SharedArrayBuffer,
+      'OffscreenCanvas='+typeof OffscreenCanvas,
+      'ownershipVerified='+String(ownershipVerified()),
+      'chunkSource='+String(lastChunkProbe.source||'unavailable'),
+      'crashState='+(state?JSON.stringify(state):'none'),
+      '',
+      '--- latest staging event only ---',
+      logText()||'<none>'
+    ].join('\n');
+  };
+  const copyDiagnostics=async()=>{
+    const text=diagnosticText();
+    try{
+      if(navigator.clipboard&&navigator.clipboard.writeText)await navigator.clipboard.writeText(text);
+      else{
+        const temp=document.createElement('textarea');temp.value=text;temp.setAttribute('readonly','');temp.style.position='fixed';temp.style.opacity='0';document.body.appendChild(temp);temp.select();document.execCommand('copy');temp.remove();
+      }
+      $('logSummary').textContent='Copied latest diagnostic state.';
+    }catch(error){$('logSummary').textContent='Copy failed: '+String(error?.message||error)}
+  };
+
+  async function ensureServiceWorker(){
+    set('secure',window.isSecureContext,String(window.isSecureContext));
+    if(!('serviceWorker'in navigator)){set('sw',false,'unsupported');return}
+    try{
+      const registration=await navigator.serviceWorker.register('./render360-pages-sw.js',{scope:'./'});
+      await navigator.serviceWorker.ready;
+      if(registration.waiting)registration.waiting.postMessage({type:'SKIP_WAITING'});
+      set('sw',true,navigator.serviceWorker.controller?'controlling':'registered');
+      if(!navigator.serviceWorker.controller&&!sessionStorage.getItem('render360PagesReloaded')){
+        sessionStorage.setItem('render360PagesReloaded','1');
+        log('Service worker installed; reloading once for isolation.');
+        location.reload();
+        return new Promise(()=>{});
+      }
+    }catch(error){set('sw',false,'registration failed');log('Service worker error:',error?.stack||String(error))}
+  }
+
+  function testSharedMemory(){
+    try{const memory=new WebAssembly.Memory({initial:1,maximum:1,shared:true});return !!memory.buffer&&Object.prototype.toString.call(memory.buffer).includes('SharedArrayBuffer')}
+    catch(error){log('Wasm shared-memory test:',String(error));return false}
+  }
+  function testWebGL2(){try{return !!document.createElement('canvas').getContext('webgl2',{antialias:false})}catch(_){return false}}
+  async function exists(path){try{const response=await fetch(path,{method:'HEAD',cache:'no-store'});return response.ok}catch(_){return false}}
+  function ownershipVerified(){return sessionStorage.getItem(OWNERSHIP_KEY)==='1'}
+  function normalizePath(name){return String(name||'').replace(/\\/g,'/').toLowerCase()}
+
+  function looksLikePortalLayout(names){
+    const normalized=names.map(normalizePath);
+    const hasGameInfo=normalized.some(x=>x.endsWith('/portal/gameinfo.txt')||x==='portal/gameinfo.txt'||x==='gameinfo.txt');
+    const hasPortalDir=normalized.some(x=>/(^|\/)portal(\/|$)/.test(x));
+    const hasPortalVpk=normalized.some(x=>/(^|\/)portal\/[^/]*_dir\.vpk$/.test(x)||/(^|\/)portal_pak_dir\.vpk$/.test(x));
+    const hasHl2Dir=normalized.some(x=>/(^|\/)hl2(\/|$)/.test(x));
+    const hasHl2Vpk=normalized.some(x=>/(^|\/)hl2\/[^/]*_dir\.vpk$/.test(x)||/(^|\/)hl2_[^/]*_dir\.vpk$/.test(x));
+    const ok=hasGameInfo&&(hasPortalVpk||hasPortalDir);
+    return{ok,hasGameInfo,hasPortalDir,hasPortalVpk,hasHl2Dir,hasHl2Vpk,fileCount:normalized.length};
+  }
+
+  async function zipEntryNames(file){
+    const tailSize=Math.min(file.size,131072),tailOffset=file.size-tailSize,tail=new Uint8Array(await file.slice(tailOffset).arrayBuffer());let eocd=-1;
+    for(let i=tail.length-22;i>=0;i--){if(tail[i]===0x50&&tail[i+1]===0x4b&&tail[i+2]===0x05&&tail[i+3]===0x06){eocd=i;break}}
+    if(eocd<0)throw new Error('ZIP directory footer not found');
+    const view=new DataView(tail.buffer,tail.byteOffset,tail.byteLength),entries=view.getUint16(eocd+10,true),cdSize=view.getUint32(eocd+12,true),cdOffset=view.getUint32(eocd+16,true);
+    if(entries===0xffff||cdSize===0xffffffff||cdOffset===0xffffffff)throw new Error('ZIP64 verification is not supported by this lightweight checker');
+    const cd=new Uint8Array(await file.slice(cdOffset,cdOffset+cdSize).arrayBuffer()),dv=new DataView(cd.buffer,cd.byteOffset,cd.byteLength),decoder=new TextDecoder(),names=[];let p=0;
+    for(let n=0;n<entries&&p+46<=cd.length;n++){
+      if(dv.getUint32(p,true)!==0x02014b50)break;
+      const nameLen=dv.getUint16(p+28,true),extraLen=dv.getUint16(p+30,true),commentLen=dv.getUint16(p+32,true);
+      names.push(decoder.decode(cd.subarray(p+46,p+46+nameLen)));
+      p+=46+nameLen+extraLen+commentLen;
+    }
+    return names;
+  }
+
+  async function verifySelectedPortalFiles(files){
+    const names=[];
+    for(const file of files){
+      if(/\.zip$/i.test(file.name)){const zipNames=await zipEntryNames(file);names.push(...zipNames);log('Inspected Portal ZIP locally:',file.name,zipNames.length+' entries')}
+      else names.push(file.webkitRelativePath||file.name);
+    }
+    return looksLikePortalLayout(names);
+  }
+
+  async function probeRuntimeChunk(){
+    const url=new URL('./chunks/background1.data',location.href).href;
+    try{
+      const response=await fetch(url,{method:'GET',cache:'no-store'});
+      const source=response.headers.get('x-render360-chunk-source')||'same-origin';
+      const result={ok:response.ok,status:response.status,source,url};
+      if(response.body&&response.body.cancel)response.body.cancel().catch(()=>{});
+      log('Runtime chunk probe:',result);
+      lastChunkProbe=result;
+      return result;
+    }catch(error){
+      const result={ok:false,source:'unavailable',error:String(error?.message||error),url};
+      log('Runtime chunk probe failed:',result);
+      lastChunkProbe=result;
+      return result;
+    }
+  }
+
+  async function localChunkReady(){
+    try{return !!globalThis.Render360PortalVPK&&await Render360PortalVPK.hasLocalChunk('background1')}
+    catch(error){log('Local chunk check failed:',String(error));return false}
+  }
+
+  async function buildLocalFallback(auto=false){
+    if(buildingLocal)return;
+    if(!selectedFromFolder||!selectedPortalFiles.length){
+      $('localProgressText').textContent='Choose the full Portal folder first. The ZIP/files fallback can verify ownership but cannot rebuild nested VPK paths.';
+      return;
+    }
+    if(!globalThis.Render360PortalVPK){
+      $('localProgressText').textContent='Local VPK builder script did not load.';
+      return;
+    }
+
+    buildingLocal=true;
+    $('buildLocal').disabled=true;
+    $('localProgress').hidden=false;
+    $('localProgress').value=0;
+    set('localStatus',false,auto?'building automatically…':'building…',true);
+    $('localProgressText').textContent=auto?'Original host failed; building from your selected VPKs automatically…':'Building browser chunks from your selected VPKs…';
+    try{
+      const result=await Render360PortalVPK.buildChunks(selectedPortalFiles,{
+        log,
+        progress:info=>{
+          if(info.total){$('localProgress').value=Math.max(0,Math.min(1,(info.index||0)/info.total));}
+          if(info.phase==='done-map'&&info.total)$('localProgress').value=Math.max(0,Math.min(1,info.index/info.total));
+          $('localProgressText').textContent=info.message||`${info.mapName||''} ${info.phase||''}`.trim();
+        }
+      });
+      $('localProgress').value=1;
+      set('localStatus',true,'ready from your VPKs');
+      $('localProgressText').textContent=`Local fallback ready. Indexed ${result.indexedFiles} game assets and generated compatible map chunks.`;
+      log('Local VPK fallback complete:',result);
+    }catch(error){
+      set('localStatus',false,'build failed',true);
+      $('localProgressText').textContent='Local VPK fallback failed: '+String(error?.message||error);
+      log('Local VPK fallback failed:',error?.stack||String(error));
+    }finally{
+      buildingLocal=false;
+      $('buildLocal').disabled=!(selectedFromFolder&&selectedPortalFiles.length);
+      await refresh(false);
+    }
+  }
+
+  async function handleOwnershipSelection(event,kind){
+    const files=Array.from(event.target.files||[]);if(!files.length)return;
+    try{
+      log('Inspecting Portal '+kind+' locally:',files.length+' files');
+      const result=await verifySelectedPortalFiles(files);
+      if(result.ok){
+        sessionStorage.setItem(OWNERSHIP_KEY,'1');
+        selectedPortalFiles=files;
+        selectedFromFolder=kind==='folder';
+        $('ownershipStatus').textContent=`Portal ${kind} verified locally (${result.fileCount} entries inspected).`;
+        log('Ownership check passed:',result);
+        $('buildLocal').disabled=!selectedFromFolder;
+        await refresh(false);
+        if(!lastChunkProbe.ok&&selectedFromFolder)await buildLocalFallback(true);
+      }else{
+        sessionStorage.removeItem(OWNERSHIP_KEY);
+        selectedPortalFiles=[];selectedFromFolder=false;
+        $('ownershipStatus').textContent='Could not verify the Portal layout. Select the full folder containing portal/, hl2/ and portal/gameinfo.txt.';
+        log('Ownership check failed:',result);
+        await refresh(false);
+      }
+    }catch(error){
+      sessionStorage.removeItem(OWNERSHIP_KEY);
+      selectedPortalFiles=[];selectedFromFolder=false;
+      $('ownershipStatus').textContent='Could not inspect that selection locally: '+String(error.message||error);
+      log('Ownership verifier error:',error?.stack||String(error));
+      await refresh(false);
+    }
+    event.target.value='';
+  }
+
+  async function refresh(logState=true){
+    const coi=window.crossOriginIsolated===true;
+    const sab=typeof SharedArrayBuffer==='function';
+    const wasmThreads=testSharedMemory();
+    const offscreen=typeof OffscreenCanvas==='function';
+    const webgl2=testWebGL2();
+    const verified=ownershipVerified();
+
+    set('coi',coi,String(coi));set('sab',sab,sab?'available':'missing');set('wasmThreads',wasmThreads,wasmThreads?'available':'unavailable');
+    set('offscreen',offscreen,offscreen?'available':'missing',!offscreen);set('webgl2',webgl2,webgl2?'available':'missing');set('ownership',verified,verified?'verified this session':'not verified',!verified);
+    updateLastRuntime();
+
+    const runtimeChecks=await Promise.all([exists('./hl2_launcher.html'),exists('./hl2_launcher.js'),exists('./hl2_launcher.wasm')]);
+    const runtimeReady=runtimeChecks.every(Boolean);set('runtime',runtimeReady,runtimeReady?'launcher + JS + Wasm':'incomplete');
+
+    const localReady=await localChunkReady();
+    if(localReady)set('localStatus',true,'ready from your VPKs');
+    else if(!buildingLocal)set('localStatus',false,selectedFromFolder?'not built':'choose folder first',true);
+
+    const chunk=await probeRuntimeChunk();
+    if(chunk.ok&&chunk.source==='local-vpk'){
+      set('chunk',true,'local VPK-generated chunks');set('upstreamStatus',false,'not needed / fallback active',true);
+    }else if(chunk.ok&&chunk.source==='upstream-yikes'){
+      set('chunk',true,'original yikes.pw chunks');set('upstreamStatus',true,'reachable');
+    }else if(chunk.ok){
+      set('chunk',true,chunk.source);set('upstreamStatus',true,'reachable through chunk path');
+    }else{
+      set('chunk',false,'both sources unavailable',true);set('upstreamStatus',false,'blocked / unavailable',true);
+    }
+
+    const threadReady=coi&&sab&&wasmThreads;
+    const ready=threadReady&&runtimeReady&&verified&&chunk.ok;
+    $('launch').disabled=!ready;
+    $('buildLocal').disabled=buildingLocal||!(selectedFromFolder&&selectedPortalFiles.length);
+
+    if(!verified)$('launchHint').textContent='Verify your Portal folder first.';
+    else if(!threadReady||!runtimeReady)$('launchHint').textContent='Portal is verified, but the threaded Pages runtime is not ready.';
+    else if(chunk.ok&&chunk.source==='local-vpk')$('launchHint').textContent='Portal verified. The original host failed, so Source will use chunks generated locally from your VPKs.';
+    else if(chunk.ok)$('launchHint').textContent='Portal verified. The original packed chunk source is reachable and can launch.';
+    else if(selectedFromFolder)$('launchHint').textContent=buildingLocal?'Original host is unavailable. Local VPK fallback is being prepared…':'Both runtime data paths are unavailable right now. Build/rebuild the local VPK fallback.';
+    else $('launchHint').textContent='Original chunk host is unavailable. Choose the full Portal folder (not only ZIP/files) so Render360 can build the VPK fallback.';
+
+    if(logState)log('crossOriginIsolated=',coi,'SharedArrayBuffer=',sab,'WasmThreads=',wasmThreads,'OffscreenCanvas=',offscreen,'WebGL2=',webgl2,'Ownership=',verified,'Chunk=',chunk.source,'LocalReady=',localReady);
+  }
+
+  $('ownershipFolder').addEventListener('change',event=>handleOwnershipSelection(event,'folder'));
+  $('ownershipFiles').addEventListener('change',event=>handleOwnershipSelection(event,'files'));
+  $('clearOwnership').addEventListener('click',async()=>{sessionStorage.removeItem(OWNERSHIP_KEY);selectedPortalFiles=[];selectedFromFolder=false;$('ownershipStatus').textContent='Verification cleared.';await refresh()});
+  $('retryChunk').addEventListener('click',()=>refresh());
+  $('buildLocal').addEventListener('click',()=>buildLocalFallback(false));
+  $('clearLocal').addEventListener('click',async()=>{if(globalThis.Render360PortalVPK)await Render360PortalVPK.clearLocalChunks();if(navigator.serviceWorker.controller)navigator.serviceWorker.controller.postMessage({type:'RENDER360_CLEAR_LOCAL_CHUNKS'});$('localProgress').hidden=true;$('localProgressText').textContent='Local VPK chunks cleared.';await refresh()});
+  $('copyLog').addEventListener('click',copyDiagnostics);
+  $('clearLog').addEventListener('click',()=>{latestLogLine='';$('logSummary').textContent='Latest diagnostic event cleared.'});
+  $('launch').addEventListener('click',markManualRelaunch);
+  $('launch').addEventListener('click',()=>{location.href='./hl2_launcher.html'});
+  $('reload').addEventListener('click',()=>{sessionStorage.removeItem('render360PagesReloaded');location.reload()});
+  window.addEventListener('error',event=>log('Page error:',event.message||event.type,event.error?.stack||''));
+  window.addEventListener('unhandledrejection',event=>log('Unhandled rejection:',event.reason?.stack||String(event.reason)));
+  (async()=>{updateLastRuntime();await ensureServiceWorker();await refresh()})();
+})();
+</script>
+</body>
+</html>
