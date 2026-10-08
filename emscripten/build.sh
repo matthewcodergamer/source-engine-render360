@@ -329,11 +329,13 @@ done
 
 echo "Render360 Portal: required filesystem/engine/ToGL module set present"
 
-preload_libs=""
-for lib in build/install/*.so; do
-	base=$(basename "$lib")
-	preload_libs="$preload_libs --preload-file $lib@/$base"
-done
+# The side modules are deliberately NOT packed into hl2_launcher.data.
+# Packing them meant all 37 MiB of .so bytes sat in JavaScript memory for the
+# life of the page, on top of the compiled copy WebKit makes at dlopen. Left
+# on disk next to the page, Emscripten's dlopen fetches each module on demand
+# (synchronous XHR on the Source pthread: libdylink.js loadLibData ->
+# readBinary(locateFile(name))) and the bytes are released once it is
+# compiled. Do not bring the preload of *.so back.
 
 # iPhone Safari has a relatively tight WebContent process budget. At startup
 # Portal simultaneously holds the shared Wasm heap, Wasm SIDE_MODULE bytes/JIT
@@ -354,7 +356,6 @@ EMCC_FORCE_STDLIBS=libc,libc++,libc++abi emcc -Os \
 	--pre-js emscripten/pre.js \
 	--pre-js emscripten/phase3-mobile-runtime.js \
 	--post-js emscripten/phase3-workerfs.js --post-js emscripten/post.js \
-	$preload_libs \
 	build/launcher_main/libhl2_launcher.a \
 	-o build/launcher_main/hl2_launcher.html
 
