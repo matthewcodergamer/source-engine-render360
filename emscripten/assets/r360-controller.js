@@ -248,30 +248,87 @@
   stick.addEventListener('lostpointercapture', endStick);
 
   // ------------------------------------------------------------------ layout
+  // Safe-area insets. The game runs in a full-screen iframe, where env()
+  // reports 0, so measure them in the (same-origin) parent page.
+  function safeInsets() {
+    const read = (doc) => {
+      const probe = doc.createElement('div');
+      probe.style.cssText = 'position:fixed;left:0;top:0;visibility:hidden;pointer-events:none;' +
+        'padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)';
+      doc.body.appendChild(probe);
+      const cs = getComputedStyle(probe);
+      const out = { t: parseFloat(cs.paddingTop) || 0, r: parseFloat(cs.paddingRight) || 0,
+        b: parseFloat(cs.paddingBottom) || 0, l: parseFloat(cs.paddingLeft) || 0 };
+      probe.remove();
+      return out;
+    };
+    let own = { t: 0, r: 0, b: 0, l: 0 };
+    try { own = read(document); } catch (_) {}
+    try {
+      if (window.parent && window.parent !== window && window.parent.document && window.parent.document.body) {
+        const p = read(window.parent.document);
+        return { t: Math.max(own.t, p.t), r: Math.max(own.r, p.r), b: Math.max(own.b, p.b), l: Math.max(own.l, p.l) };
+      }
+    } catch (_) {}
+    return own;
+  }
+
+  // Thumb-zone layout, mirrored left/right:
+  //   top row     Pause (left) · Back Start (centre) · LB RB (right)
+  //   left thumb  Move pad in the bottom corner, LT just above it
+  //   right thumb Y/X/B/A diamond level with the pad, RT just above it
+  // Sizes and shapes come from the reference pad; positions are anchored to
+  // the edges and safe area so spacing stays natural on any screen.
   function layout() {
     const vv = window.visualViewport;
     const W = vv ? vv.width : window.innerWidth;
     const H = vv ? vv.height : window.innerHeight;
-    // Same proportions on every screen; sizes follow the shorter scale so
-    // nothing overlaps when the page is wider or shorter than the reference.
-    const k = Math.max(0.75, Math.min(1.6, Math.min(W / REF_W, H / REF_H)));
+    const k = Math.max(0.75, Math.min(1.35, Math.min(W / REF_W, H / REF_H)));
+    const inset = safeInsets();
+    const side = Math.max(inset.l, inset.r);          // the notch can be on either side
+    const M = side + 40 * k;                           // side margin
+    const top = inset.t + Math.max(38, 38 * k);        // below the ••• menu pill (8–30 px)
+    const bottom = H - inset.b - 24 * k;
     root.style.fontSize = `${9 * k}px`;
-    const box = (el, spec) => {
-      const w = spec.w * k, h = spec.h * k;
-      // Anchor each control by its centre in the reference so scaling keeps
-      // the same spacing.
-      const cx = (spec.x + spec.w / REF_W / 2) * W;
-      const cy = (spec.y + spec.h / REF_H / 2) * H;
+
+    const spec = Object.fromEntries(BUTTONS.map((b) => [b.id, b]));
+    const put = (el, w, h, left, topY) => {
       el.style.width = `${w}px`;
       el.style.height = `${h}px`;
-      el.style.left = `${Math.round(cx - w / 2)}px`;
-      el.style.top = `${Math.round(cy - h / 2)}px`;
+      el.style.left = `${Math.round(left)}px`;
+      el.style.top = `${Math.round(topY)}px`;
     };
-    for (const spec of BUTTONS) box(elements[spec.id], spec);
+    const dims = (id) => [spec[id].w * k, spec[id].h * k];
 
-    box(stick, STICK);
+    // Top row.
+    let [w, h] = dims('pause'); put(elements.pause, w, h, M, top);
+    // Back and Start flank the 44 px ••• pill with a fixed gap.
+    const flank = 22 + 12 * k;
+    [w, h] = dims('back'); put(elements.back, w, h, W / 2 - flank - w, top);
+    [w, h] = dims('start'); put(elements.start, w, h, W / 2 + flank, top);
+    const [rbw, rbh] = dims('rb'); put(elements.rb, rbw, rbh, W - M - rbw, top);
+    [w, h] = dims('lb'); put(elements.lb, w, h, W - M - rbw - 14 * k - w, top);
+
+    // Left thumb: Move pad, LT above it.
+    const sw = STICK.w * k, sh = STICK.h * k;
+    const padLeft = M, padTop = bottom - sh;
+    put(stick, sw, sh, padLeft, padTop);
+    [w, h] = dims('lt'); put(elements.lt, w, h, padLeft + sw / 2 - w / 2, padTop - 14 * k - h);
+
+    // Right thumb: face diamond level with the pad, RT above it.
+    const [fw, fh] = dims('a');
+    const dx = 47.5 * k, dy = 34.5 * k;
+    const cx = W - M - fw / 2 - dx;
+    const cy = padTop + sh / 2;
+    put(elements.y, fw, fh, cx - fw / 2, cy - dy - fh / 2);
+    put(elements.a, fw, fh, cx - fw / 2, cy + dy - fh / 2);
+    put(elements.x, fw, fh, cx - dx - fw / 2, cy - fh / 2);
+    put(elements.b, fw, fh, cx + dx - fw / 2, cy - fh / 2);
+    [w, h] = dims('rt'); put(elements.rt, w, h, cx - w / 2, cy - dy - fh / 2 - 12 * k - h);
+
+    // Move pad internals.
     stick.style.borderRadius = `${48 * k}px / ${46 * k}px`;
-    const sw = STICK.w * k, sh = STICK.h * k, a = 9 * k;
+    const a = 9 * k;
     const arrows = {
       up: [sw / 2 - a / 2, 12 * k, -135], down: [sw / 2 - a / 2, sh - 12 * k - a, 45],
       left: [16 * k, sh / 2 - a / 2, 135], right: [sw - 16 * k - a, sh / 2 - a / 2, -45],
@@ -326,6 +383,7 @@
   }
 
   window.addEventListener('resize', layout);
+  window.addEventListener('orientationchange', () => setTimeout(layout, 300));
   if (window.visualViewport) window.visualViewport.addEventListener('resize', layout);
   window.addEventListener('blur', releaseAll);
   document.addEventListener('visibilitychange', () => { if (document.hidden) releaseAll(); });
