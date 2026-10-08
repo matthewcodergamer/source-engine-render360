@@ -425,6 +425,8 @@
         } catch (_) {}
         try {
           var tail = typeof render360ReadLogTail === 'function' ? render360ReadLogTail() : [];
+          var notable = typeof render360ReadNotable === 'function' ? render360ReadNotable() : [];
+          if (notable && notable.length) lines.push('', '--- errors, fonts and audio (' + notable.length + ') ---', notable.join('\n'));
           if (tail && tail.length) lines.push('', '--- engine log tail (last ' + tail.length + ' lines) ---', tail.join('\n'));
         } catch (_) {}
         return lines.join('\n');

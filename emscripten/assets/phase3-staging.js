@@ -143,6 +143,7 @@
     }
     document.documentElement.style.overflow = '';
     document.body.style.overflow = '';
+    leaveImmersive();
     try {
       if(document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(() => {});
       else if(document.webkitFullscreenElement && document.webkitExitFullscreen) document.webkitExitFullscreen();
@@ -186,10 +187,38 @@
 
     overlay.append(frame);
     document.body.appendChild(overlay);
-    document.documentElement.style.overflow = 'hidden';
-    document.body.style.overflow = 'hidden';
     runtimeOverlay = overlay;
     runtimeFrame = frame;
+    enterImmersive();
+  }
+
+  // Safari collapses its address bar when the page scrolls down. While the
+  // game runs, give the page room to scroll behind the fixed game layer and
+  // scroll it on every landscape rotation, so turning the phone sideways
+  // goes full screen like it did with the old launcher page.
+  let immersiveSpacer = null;
+  function collapseBrowserBars() {
+    if(!runtimeOverlay) return;
+    const landscape = window.matchMedia && matchMedia('(orientation: landscape)').matches;
+    if(!landscape) return;
+    window.scrollTo(0, document.documentElement.scrollHeight);
+  }
+  function onRotate() { setTimeout(collapseBrowserBars, 350); setTimeout(collapseBrowserBars, 900); }
+  function enterImmersive() {
+    if(!immersiveSpacer) {
+      immersiveSpacer = document.createElement('div');
+      immersiveSpacer.style.cssText = 'height:60vh;pointer-events:none';
+      document.body.appendChild(immersiveSpacer);
+    }
+    window.addEventListener('orientationchange', onRotate);
+    window.addEventListener('resize', onRotate);
+    onRotate();
+  }
+  function leaveImmersive() {
+    window.removeEventListener('orientationchange', onRotate);
+    window.removeEventListener('resize', onRotate);
+    if(immersiveSpacer) { immersiveSpacer.remove(); immersiveSpacer = null; }
+    window.scrollTo(0, 0);
   }
 
   function installUI() {

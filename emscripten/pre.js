@@ -86,10 +86,21 @@ function render360ReadThreadCount() {
 const RENDER360_LOG_TAIL_KEY = 'render360-ios-log-tail-v1'
 const RENDER360_LOG_TAIL_LINES = 40
 const render360LogTail = []
+// Errors and font/audio lines, kept apart so a long run cannot push them out
+// of the 40-line tail before anyone copies diagnostics.
+const RENDER360_NOTABLE_KEY = 'render360-ios-notable-v1'
+const RENDER360_NOTABLE_RE = /font|error|fail|couldn'?t|cannot|can't|unable|missing|not found|warning|audio|sound/i
+const render360Notable = []
 let render360LogTailDirty = false
 function render360RememberLine(text) {
 	const line = String(text || '').trim()
 	if(!line) return
+	if(RENDER360_NOTABLE_RE.test(line) && render360Notable.length < 60) {
+		const last = render360Notable[render360Notable.length - 1]
+		if(!last || !last.endsWith(line.slice(0, 300))) {
+			render360Notable.push(`${((Date.now() - render360Now) / 1000).toFixed(1)}s ${line.slice(0, 300)}`)
+		}
+	}
 	render360LogTail.push(`${((Date.now() - render360Now) / 1000).toFixed(1)}s ${line.slice(0, 300)}`)
 	if(render360LogTail.length > RENDER360_LOG_TAIL_LINES) render360LogTail.splice(0, render360LogTail.length - RENDER360_LOG_TAIL_LINES)
 	render360LogTailDirty = true
@@ -98,6 +109,11 @@ function render360FlushLogTail() {
 	if(!render360IsWindow || !render360LogTailDirty) return
 	render360LogTailDirty = false
 	try { localStorage.setItem(RENDER360_LOG_TAIL_KEY, JSON.stringify(render360LogTail)) } catch(_) {}
+	try { localStorage.setItem(RENDER360_NOTABLE_KEY, JSON.stringify(render360Notable)) } catch(_) {}
+}
+globalThis.render360ReadNotable = () => {
+	if(render360Notable.length) return render360Notable.slice()
+	try { return JSON.parse(localStorage.getItem(RENDER360_NOTABLE_KEY) || '[]') } catch(_) { return [] }
 }
 globalThis.render360ReadLogTail = () => {
 	if(render360LogTail.length) return render360LogTail.slice()
@@ -106,6 +122,7 @@ globalThis.render360ReadLogTail = () => {
 if(render360IsWindow && !render360ProbableProcessReload) {
 	// A fresh launch must not show the tail of an older run.
 	try { localStorage.removeItem(RENDER360_LOG_TAIL_KEY) } catch(_) {}
+	try { localStorage.removeItem(RENDER360_NOTABLE_KEY) } catch(_) {}
 }
 
 function render360PersistCrashState() {
@@ -276,7 +293,9 @@ Module['arguments'].push(
 	'-hideconsole',
 	// The canvas rarely holds DOM focus in a browser, and Source would mute
 	// itself whenever it believes the window is in the background.
-	'+snd_mute_losefocus', '0'
+	'+snd_mute_losefocus', '0',
+	// Full scale is harsh on a phone speaker; still adjustable in Options.
+	'+volume', '0.7'
 )
 
 // A phone has no keyboard and iOS has never shipped Pointer Lock, so the
