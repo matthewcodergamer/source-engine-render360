@@ -140,6 +140,13 @@ jobs:
           source emsdk/emsdk_env.sh
           bash emscripten/build.sh release
 
+      - name: Check wasm link closure
+        shell: bash
+        run: |
+          # Every module must find every C++ symbol it imports in another
+          # module, or the phone aborts with "undefined symbol" at load.
+          python3 scripts/check_wasm_links.py build/install
+
       - name: Validate runtime and prepare staging site
         shell: bash
         run: |
