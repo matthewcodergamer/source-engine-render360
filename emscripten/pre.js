@@ -271,7 +271,9 @@ Module['arguments'].push(
 	// logging. -threads 1 makes CMaterialSystem::AllowThreading refuse queued
 	// rendering and leaves the global job pool with no worker threads.
 	'-threads', '1',
-	'+mat_queue_mode', '0'
+	'+mat_queue_mode', '0',
+	// Never open the developer console on its own.
+	'-hideconsole'
 )
 
 // A phone has no keyboard and iOS has never shipped Pointer Lock, so the
@@ -283,7 +285,11 @@ if(render360IsWindow) {
 	try { coarsePointer = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches) } catch(_) {}
 	const phone = navigator.maxTouchPoints > 0 && coarsePointer
 	if(phone) {
-		Module['arguments'].push('+touch_enable', '1', '+touch_draw', '1')
+		// Source's touch layer only provides camera look (see the touch.cfg
+		// written in preRun); buttons and movement are the HTML controller in
+		// shell.html. Its own textured buttons stay hidden: Portal does not
+		// ship materials/vgui/touch, so they would draw as missing textures.
+		Module['arguments'].push('+touch_enable', '1', '+touch_draw', '0')
 		// Quarter-size textures. On a 6 inch screen the difference is hard to
 		// see, and textures are the largest thing a map load adds to both the
 		// Wasm heap and GPU memory, which is where iOS kills the page.
@@ -801,5 +807,74 @@ if(!render360IsWindow && typeof self !== 'undefined' && typeof self.addEventList
 		const error = event?.error
 		const stack = String(error?.stack || '').split('\n').slice(0, 24).join(' | ')
 		render360Log(`[Render360 worker stack] ${error?.message || event?.message || 'error'} :: ${stack || '<no stack>'}`)
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Files the engine expects that a retail Windows Portal folder lacks.
+//
+// Fonts: without fontconfig, vgui maps every system font (Tahoma, Verdana,
+// Lucida Console, ...) to platform/resource/linux_fonts/dejavusans*.ttf
+// (linuxfont.cpp TryFindFont). The old packed chunks carried those files;
+// Phase 3 reads the user's own folder, which does not, so every system-font
+// string - main menu, console, HUD - drew as solid blocks. Only fonts that
+// Portal ships itself rendered.
+//
+// touch.cfg: replaces Source's default touch layout with one full-screen
+// camera-look zone, so the HTML controller owns every button.
+const RENDER360_FONT_FILES = [
+	['dejavusans.ttf', ['dejavusans.ttf', 'dejavusans-oblique.ttf']],
+	['dejavusans-bold.ttf', ['dejavusans-bold.ttf', 'dejavusans-boldoblique.ttf']],
+	['dejavusansmono.ttf', ['dejavusansmono.ttf', 'liberationmono-regular.ttf']],
+]
+const RENDER360_TOUCH_CFG = [
+	'touch_removeall',
+	'touch_addbutton "look" "" "_look" 0.000000 0.000000 1.000000 1.000000 255 255 255 0 0',
+	'touch_config_file "touch.cfg"',
+	''
+].join('\n')
+
+async function render360InstallSupportFiles(phone) {
+	const fontDir = '/platform/resource/linux_fonts'
+	let fonts = 0
+	for(const [source, names] of RENDER360_FONT_FILES) {
+		try {
+			const response = await fetch(`fonts/${source}`, { credentials: 'same-origin' })
+			if(!response.ok) throw new Error(`HTTP ${response.status}`)
+			const bytes = new Uint8Array(await response.arrayBuffer())
+			FS.mkdirTree(fontDir)
+			const primary = `${fontDir}/${names[0]}`
+			try { FS.unlink(primary) } catch(_) {}
+			FS.writeFile(primary, bytes)
+			for(const alias of names.slice(1)) {
+				const path = `${fontDir}/${alias}`
+				try { FS.unlink(path) } catch(_) {}
+				FS.symlink(primary, path)
+			}
+			fonts++
+		} catch(error) {
+			Module.printErr?.(`[Render360] font ${source} unavailable: ${error?.message || error}`)
+		}
+	}
+	if(phone) {
+		try {
+			FS.mkdirTree('/portal/cfg')
+			FS.writeFile('/portal/cfg/touch.cfg', RENDER360_TOUCH_CFG)
+		} catch(error) {
+			Module.printErr?.(`[Render360] touch.cfg not written: ${error?.message || error}`)
+		}
+	}
+	Module.print?.(`[Render360] installed ${fonts}/${RENDER360_FONT_FILES.length} fallback fonts${phone ? ' and the touch look layout' : ''}`)
+}
+
+if(render360IsWindow && !render360ProbableProcessReload) {
+	let phone = false
+	try { phone = navigator.maxTouchPoints > 0 && matchMedia('(pointer: coarse)').matches } catch(_) {}
+	Module['preRun'] = Module['preRun'] || []
+	Module['preRun'].push(() => {
+		addRunDependency('render360-support-files')
+		render360InstallSupportFiles(phone)
+			.catch(error => Module.printErr?.(`[Render360] support files failed: ${error?.stack || error}`))
+			.finally(() => removeRunDependency('render360-support-files'))
 	})
 }
