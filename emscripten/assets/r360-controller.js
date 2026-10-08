@@ -31,8 +31,8 @@
   // Portal's default bindings.
   const BUTTONS = [
     { id: 'pause', label: 'Pause', sub: 'Menu', key: 'ESC', cls: 'r360c-pill r360c-amber', menuToggle: true },
-    { id: 'back', label: 'Back', sub: 'Save', key: 'F6', cls: 'r360c-pill' },
-    { id: 'start', label: 'Start', sub: 'Load', key: 'F9', cls: 'r360c-pill' },
+    { id: 'back', label: 'Back', sub: 'Save', key: 'F6', cls: 'r360c-pill r360c-plain' },
+    { id: 'start', label: 'Start', sub: 'Load', key: 'F9', cls: 'r360c-pill r360c-plain' },
     { id: 'lb', label: 'LB', sub: 'Walk', key: 'SHIFT', cls: 'r360c-shoulder r360c-blue' },
     { id: 'rb', label: 'RB', sub: 'Use', key: 'E', cls: 'r360c-shoulder r360c-blue' },
     { id: 'lt', label: 'LT', sub: 'Blue portal', mouse: 0, cls: 'r360c-trigger r360c-cyan' },
@@ -45,45 +45,47 @@
 
   const css = `
     #r360c { position: fixed; inset: 0; z-index: 25; pointer-events: none; display: none;
-      font: 600 15px -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif; color: #f5f5f7;
+      font: 700 16px -apple-system, BlinkMacSystemFont, "SF Pro Rounded", "SF Pro Text", system-ui, sans-serif; color: #fff;
       -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
     body.r360-playing #r360c.r360c-on { display: block; }
+    /* See-through glass: the game stays visible behind every control. */
     #r360c button { pointer-events: auto; position: absolute; appearance: none; margin: 0; padding: 0;
-      border: 1.5px solid rgba(255,255,255,.16); color: #f5f5f7; font: inherit; touch-action: none;
-      background: rgba(22,24,30,.55); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
-      display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px;
-      transition: transform .06s ease, background-color .06s ease; }
-    #r360c button small { font-size: 9.5px; font-weight: 500; opacity: .6; letter-spacing: .01em; }
-    #r360c button.r360c-down { transform: scale(.93); background: rgba(255,255,255,.28); }
+      --c: 255,255,255;
+      border: 2px solid rgba(var(--c), .75); color: #fff; font: inherit; touch-action: none;
+      background-color: rgba(8,10,16,.24);
+      background-image: linear-gradient(rgba(var(--c), .22), rgba(var(--c), .22));
+      box-shadow: 0 0 14px rgba(var(--c), .35), inset 0 0 12px rgba(var(--c), .18);
+      text-shadow: 0 1px 3px rgba(0,0,0,.55);
+      display: flex; align-items: center; justify-content: center;
+      transition: transform .06s ease, background-color .06s ease, box-shadow .06s ease; }
+    #r360c button.r360c-down { transform: scale(.92); background-image: linear-gradient(rgba(var(--c), .5), rgba(var(--c), .5));
+      box-shadow: 0 0 22px rgba(var(--c), .7), inset 0 0 14px rgba(var(--c), .35); }
     #r360c.r360c-menu button:not([data-id="pause"]) { display: none; }
     #r360c.r360c-menu #r360c-stick { display: none; }
-    .r360c-pill { width: 96px; height: 40px; border-radius: 20px; }
-    .r360c-shoulder { width: 98px; height: 42px; border-radius: 21px; }
-    .r360c-trigger { width: 132px; height: 50px; border-radius: 25px; }
-    .r360c-face { width: 64px; height: 64px; border-radius: 50%; font-size: 18px; }
-    .r360c-amber { background: rgba(120,84,30,.5) !important; border-color: rgba(230,170,80,.45) !important; }
-    .r360c-blue { background: rgba(26,40,66,.55) !important; }
-    .r360c-cyan { background: rgba(20,70,90,.5) !important; border-color: rgba(80,190,240,.45) !important; }
-    .r360c-orange { background: rgba(100,52,18,.5) !important; border-color: rgba(250,150,60,.45) !important; }
-    .r360c-y { background: rgba(90,70,20,.5) !important; }
-    .r360c-x { background: rgba(20,46,86,.5) !important; }
-    .r360c-b { background: rgba(90,24,32,.5) !important; }
-    .r360c-a { background: rgba(20,70,40,.5) !important; }
-    #r360c-stick { pointer-events: auto; position: absolute; width: 168px; height: 168px; border-radius: 50%;
-      background: rgba(22,24,30,.5); border: 1.5px solid rgba(255,255,255,.14); touch-action: none;
-      -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
-    #r360c-stick .r360c-arrow { position: absolute; width: 14px; height: 14px; border: solid rgba(255,255,255,.75);
-      border-width: 0 2.5px 2.5px 0; }
-    #r360c-stick .r360c-up { left: 77px; top: 14px; transform: rotate(-135deg); }
-    #r360c-stick .r360c-down { left: 77px; bottom: 14px; transform: rotate(45deg); }
-    #r360c-stick .r360c-left { top: 77px; left: 14px; transform: rotate(135deg); }
-    #r360c-stick .r360c-right { top: 77px; right: 14px; transform: rotate(-45deg); }
-    #r360c-stick .r360c-label { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
-      font-size: 14px; opacity: .8; }
-    #r360c-knob { position: absolute; left: 54px; top: 54px; width: 60px; height: 60px; border-radius: 50%;
-      background: rgba(255,255,255,.22); border: 1.5px solid rgba(255,255,255,.35); opacity: 0; transition: opacity .1s; }
+    .r360c-pill, .r360c-shoulder, .r360c-trigger { border-radius: 999px; }
+    .r360c-face { border-radius: 50%; font-size: 21px !important; }
+    .r360c-amber  { --c: 255,184,64 !important; }
+    .r360c-plain  { --c: 200,225,255 !important; }
+    .r360c-blue   { --c: 120,170,255 !important; }
+    .r360c-cyan   { --c: 47,190,255 !important; }
+    .r360c-orange { --c: 255,140,40 !important; }
+    .r360c-y { --c: 255,214,64 !important; }
+    .r360c-x { --c: 64,150,255 !important; }
+    .r360c-b { --c: 255,72,88 !important; }
+    .r360c-a { --c: 72,224,120 !important; }
+    #r360c-stick { pointer-events: auto; position: absolute; border-radius: 50%; touch-action: none;
+      background: rgba(8,10,16,.22); border: 2px solid rgba(255,255,255,.7);
+      box-shadow: 0 0 16px rgba(255,255,255,.18), inset 0 0 18px rgba(255,255,255,.10); }
+    #r360c-stick .r360c-arrow { position: absolute; width: 14px; height: 14px; border: solid rgba(255,255,255,.85);
+      border-width: 0 3px 3px 0; filter: drop-shadow(0 1px 2px rgba(0,0,0,.5)); }
+    #r360c-stick .r360c-up { top: 14px; transform: rotate(-135deg); }
+    #r360c-stick .r360c-down { bottom: 14px; transform: rotate(45deg); }
+    #r360c-stick .r360c-left { left: 14px; transform: rotate(135deg); }
+    #r360c-stick .r360c-right { right: 14px; transform: rotate(-45deg); }
+    #r360c-knob { position: absolute; border-radius: 50%; background: rgba(255,255,255,.35);
+      border: 2px solid rgba(255,255,255,.85); box-shadow: 0 0 18px rgba(255,255,255,.45);
+      opacity: 0; transition: opacity .1s; }
     #r360c-stick.r360c-active #r360c-knob { opacity: 1; }
-    #r360c-stick.r360c-active .r360c-label { opacity: 0; }
   `;
 
   // ------------------------------------------------------------------ input
@@ -152,9 +154,8 @@
     button.type = 'button';
     button.className = spec.cls;
     button.dataset.id = spec.id;
-    button.innerHTML = `<span></span><small></small>`;
-    button.firstChild.textContent = spec.label;
-    button.lastChild.textContent = spec.sub;
+    button.textContent = spec.label;
+    button.setAttribute('aria-label', `${spec.label}: ${spec.sub}`);
     root.appendChild(button);
     elements[spec.id] = button;
 
@@ -198,7 +199,7 @@
   stick.id = 'r360c-stick';
   stick.innerHTML = '<i class="r360c-arrow r360c-up"></i><i class="r360c-arrow r360c-down"></i>' +
     '<i class="r360c-arrow r360c-left"></i><i class="r360c-arrow r360c-right"></i>' +
-    '<span class="r360c-label">Move</span><div id="r360c-knob"></div>';
+    '<div id="r360c-knob"></div>';
   root.appendChild(stick);
   const knob = stick.querySelector('#r360c-knob');
   let stickPointer = null;

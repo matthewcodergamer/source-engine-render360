@@ -58,9 +58,24 @@
     return { files: descriptors.length, bytes, vpks, dirs, maps, gameinfo, background1 };
   }
 
+  // The page's own refresh() also writes launchHint, with technical text
+  // about the old packed-chunk path. Once the folder is ready for Phase 3,
+  // keep showing the short message instead.
+  let phase3Hint = '';
+  let hintObserver = null;
   function setPhase3Status(text) {
     const hint = document.getElementById('launchHint');
-    if(hint) hint.textContent = text;
+    if(!hint) return;
+    phase3Hint = text;
+    hint.textContent = text;
+    if(!hintObserver && typeof MutationObserver === 'function') {
+      hintObserver = new MutationObserver(() => {
+        if(phase3Hint && globalThis.render360Phase3DirectSelected && hint.textContent !== phase3Hint) {
+          hint.textContent = phase3Hint;
+        }
+      });
+      hintObserver.observe(hint, { childList: true, characterData: true, subtree: true });
+    }
   }
 
   function refreshButton() {
@@ -70,10 +85,10 @@
     phase3Button.disabled = !ready;
     globalThis.render360Phase3DirectSelected = ready;
     if(ready) {
-      phase3Button.textContent = 'Launch Phase 3 · Current Map Only';
-      setPhase3Status(`Phase 3 ready: ${stats.vpks} VPKs + ${stats.maps} loose map files stay browser-backed. background1.bsp verified. Policy: ${RESIDENCY_POLICY}.`);
+      phase3Button.textContent = 'Play Portal';
+      setPhase3Status(`Ready. ${stats.vpks} game archives and ${stats.maps} maps found.`);
     } else if(stats.gameinfo && stats.vpks > 0 && !stats.background1) {
-      setPhase3Status('Portal files were found, but portal/maps/background1.bsp is missing from the selected folder. Choose the full Portal installation folder so the real menu BSP can be streamed.');
+      setPhase3Status('Some files are missing (portal/maps/background1.bsp). Choose the whole Portal folder.');
     }
   }
 
@@ -137,7 +152,7 @@
   function launchDirectVPK() {
     const stats = summarize(retailDescriptors);
     if(!stats.gameinfo || !stats.background1 || !stats.dirs || !stats.vpks) {
-      setPhase3Status('Choose the full Portal folder again before launching Phase 3. It must include portal/gameinfo.txt, portal/maps/background1.bsp and the retail VPKs. File objects cannot survive a page reload.');
+      setPhase3Status('Choose your Portal folder again. The browser forgets it after a reload.');
       return;
     }
 
@@ -149,7 +164,7 @@
       if(typeof request === 'function') Promise.resolve(request.call(root)).catch(() => {});
     } catch(_) {}
     globalThis.render360Phase3DirectSelected = true;
-    setPhase3Status(`Starting Phase 3. ${RESIDENCY_POLICY}.`);
+    setPhase3Status('Starting Portal…');
 
     // The game owns the whole screen: no header, no borders. The in-game menu
     // (and its Quit button) lives inside the launcher page itself.
@@ -192,7 +207,8 @@
       button.id = 'launchPhase3';
       button.type = 'button';
       button.disabled = true;
-      button.textContent = 'Launch Phase 3 · Current Map Only';
+      // Formerly "Launch Phase 3 · Current Map Only".
+      button.textContent = 'Play Portal';
       button.addEventListener('click', launchDirectVPK);
       actions.prepend(button);
       phase3Button = button;
