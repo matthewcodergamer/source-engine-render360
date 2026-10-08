@@ -261,7 +261,17 @@ Module['arguments'].push(
 	'-novid',
 	'-nojoy',
 	'+mat_hdr_level', '0',
-	'+mat_colorcorrection', '1'
+	'+mat_colorcorrection', '1',
+	// One rendering thread. The WebGL context belongs to the engine's main
+	// pthread (OffscreenCanvas), and Emscripten keeps GL object tables per
+	// thread, so the queued material system's render thread (mat_queue_mode)
+	// issues GL calls with ids its thread has never seen. On iPhone that
+	// thread died ~29 s into the menu load: first as getShaderInfoLog(<not a
+	// shader>), then as an out-of-bounds access, while the main thread kept
+	// logging. -threads 1 makes CMaterialSystem::AllowThreading refuse queued
+	// rendering and leaves the global job pool with no worker threads.
+	'-threads', '1',
+	'+mat_queue_mode', '0'
 )
 
 // A phone has no keyboard and iOS has never shipped Pointer Lock, so the
@@ -782,3 +792,14 @@ if(render360IsWindow && !render360ProbableProcessReload) {
 		}
 	}
 })()
+
+// A Worker's uncaught error reaches the page only as "Pthread 0x... sent an
+// error!" with the message and no stack. Log the stack from inside the Worker
+// so diagnostics show which code path failed.
+if(!render360IsWindow && typeof self !== 'undefined' && typeof self.addEventListener === 'function') {
+	self.addEventListener('error', event => {
+		const error = event?.error
+		const stack = String(error?.stack || '').split('\n').slice(0, 24).join(' | ')
+		render360Log(`[Render360 worker stack] ${error?.message || event?.message || 'error'} :: ${stack || '<no stack>'}`)
+	})
+}
