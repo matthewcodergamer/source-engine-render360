@@ -28,64 +28,56 @@
     F9: { key: 'F9', code: 'F9', keyCode: 120 },
   };
 
-  // Portal's default bindings.
+  // Portal's default bindings. Geometry is measured one-to-one from the
+  // reference pad (iPhone 11 landscape, 896x350 CSS px below Safari's bar):
+  // x/y are the top-left corner as fractions of the page, w/h in CSS px.
   const BUTTONS = [
-    { id: 'pause', label: 'Pause', sub: 'Menu', key: 'ESC', cls: 'r360c-pill r360c-amber', menuToggle: true },
-    { id: 'back', label: 'Back', sub: 'Save', key: 'F6', cls: 'r360c-pill r360c-plain' },
-    { id: 'start', label: 'Start', sub: 'Load', key: 'F9', cls: 'r360c-pill r360c-plain' },
-    { id: 'lb', label: 'LB', sub: 'Walk', key: 'SHIFT', cls: 'r360c-shoulder r360c-blue' },
-    { id: 'rb', label: 'RB', sub: 'Use', key: 'E', cls: 'r360c-shoulder r360c-blue' },
-    { id: 'lt', label: 'LT', sub: 'Blue portal', mouse: 0, cls: 'r360c-trigger r360c-cyan' },
-    { id: 'rt', label: 'RT', sub: 'Orange portal', mouse: 2, cls: 'r360c-trigger r360c-orange' },
-    { id: 'y', label: 'Y', sub: 'Walk', key: 'SHIFT', cls: 'r360c-face r360c-y' },
-    { id: 'x', label: 'X', sub: 'Use', key: 'E', cls: 'r360c-face r360c-x' },
-    { id: 'b', label: 'B', sub: 'Crouch', key: 'CTRL', cls: 'r360c-face r360c-b' },
-    { id: 'a', label: 'A', sub: 'Jump', key: 'SPACE', cls: 'r360c-face r360c-a' },
+    { id: 'pause', label: 'Pause', sub: 'Menu', key: 'ESC', tint: 'amber', menuToggle: true, x: .1094, y: .111, w: 92, h: 40 },
+    { id: 'back', label: 'Back', sub: 'Quick save', key: 'F6', tint: 'gray', x: .4068, y: .111, w: 61, h: 40 },
+    { id: 'start', label: 'Start', sub: 'Quick load', key: 'F9', tint: 'gray', x: .4955, y: .111, w: 65, h: 40 },
+    { id: 'lb', label: 'LB', sub: 'Walk', key: 'SHIFT', tint: 'navy', x: .6362, y: .120, w: 64, h: 40 },
+    { id: 'rb', label: 'RB', sub: 'Use', key: 'E', tint: 'navy', x: .7243, y: .120, w: 65, h: 40 },
+    { id: 'lt', label: 'LT', sub: 'Blue portal', mouse: 0, tint: 'green', x: .1546, y: .419, w: 92, h: 39 },
+    { id: 'rt', label: 'RT', sub: 'Orange portal', mouse: 2, tint: 'red', x: .8058, y: .419, w: 92, h: 39 },
+    { id: 'y', label: 'Y', sub: 'Walk', key: 'SHIFT', tint: 'amber', face: true, x: .7210, y: .473, w: 50, h: 41 },
+    { id: 'x', label: 'X', sub: 'Use', key: 'E', tint: 'navy', face: true, x: .6680, y: .570, w: 50, h: 41 },
+    { id: 'b', label: 'B', sub: 'Crouch', key: 'CTRL', tint: 'red', face: true, x: .7734, y: .570, w: 50, h: 41 },
+    { id: 'a', label: 'A', sub: 'Jump', key: 'SPACE', tint: 'green', face: true, x: .7199, y: .670, w: 50, h: 41 },
   ];
+  const STICK = { x: .1211, y: .551, w: 145, h: 110 };
+  const REF_W = 896, REF_H = 350;
 
   const css = `
     #r360c { position: fixed; inset: 0; z-index: 25; pointer-events: none; display: none;
-      font: 700 16px -apple-system, BlinkMacSystemFont, "SF Pro Rounded", "SF Pro Text", system-ui, sans-serif; color: #fff;
+      font: 600 9px -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif; color: #e9eaee;
       -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
     body.r360-playing #r360c.r360c-on { display: block; }
-    /* See-through glass: the game stays visible behind every control. */
-    #r360c button { pointer-events: auto; position: absolute; appearance: none; margin: 0; padding: 0;
-      --c: 255,255,255;
-      border: 2px solid rgba(var(--c), .75); color: #fff; font: inherit; touch-action: none;
-      background-color: rgba(8,10,16,.24);
-      background-image: linear-gradient(rgba(var(--c), .22), rgba(var(--c), .22));
-      box-shadow: 0 0 14px rgba(var(--c), .35), inset 0 0 12px rgba(var(--c), .18);
-      text-shadow: 0 1px 3px rgba(0,0,0,.55);
-      display: flex; align-items: center; justify-content: center;
-      transition: transform .06s ease, background-color .06s ease, box-shadow .06s ease; }
-    #r360c button.r360c-down { transform: scale(.92); background-image: linear-gradient(rgba(var(--c), .5), rgba(var(--c), .5));
-      box-shadow: 0 0 22px rgba(var(--c), .7), inset 0 0 14px rgba(var(--c), .35); }
+    /* Dark, faintly tinted glass with a hairline border, as in the reference;
+       the fill is translucent so the game shows through. */
+    #r360c button, #r360c-stick { pointer-events: auto; position: absolute; appearance: none; margin: 0; padding: 0;
+      color: #e9eaee; font: inherit; touch-action: none;
+      background: rgba(var(--bg), .62); border: 1px solid rgba(var(--bd), .95);
+      display: flex; align-items: center; justify-content: center; line-height: 1;
+      transition: transform .06s ease, background-color .06s ease, border-color .06s ease; }
+    #r360c button { border-radius: 999px; }
+    #r360c button.r360c-face { border-radius: 50%; }
+    #r360c button.r360c-down { transform: scale(.94); background: rgba(var(--bd), .7); border-color: rgba(255,255,255,.55); }
     #r360c.r360c-menu button:not([data-id="pause"]) { display: none; }
     #r360c.r360c-menu #r360c-stick { display: none; }
-    .r360c-pill, .r360c-shoulder, .r360c-trigger { border-radius: 999px; }
-    .r360c-face { border-radius: 50%; font-size: 21px !important; }
-    .r360c-amber  { --c: 255,184,64 !important; }
-    .r360c-plain  { --c: 200,225,255 !important; }
-    .r360c-blue   { --c: 120,170,255 !important; }
-    .r360c-cyan   { --c: 47,190,255 !important; }
-    .r360c-orange { --c: 255,140,40 !important; }
-    .r360c-y { --c: 255,214,64 !important; }
-    .r360c-x { --c: 64,150,255 !important; }
-    .r360c-b { --c: 255,72,88 !important; }
-    .r360c-a { --c: 72,224,120 !important; }
-    #r360c-stick { pointer-events: auto; position: absolute; border-radius: 50%; touch-action: none;
-      background: rgba(8,10,16,.22); border: 2px solid rgba(255,255,255,.7);
-      box-shadow: 0 0 16px rgba(255,255,255,.18), inset 0 0 18px rgba(255,255,255,.10); }
-    #r360c-stick .r360c-arrow { position: absolute; width: 14px; height: 14px; border: solid rgba(255,255,255,.85);
-      border-width: 0 3px 3px 0; filter: drop-shadow(0 1px 2px rgba(0,0,0,.5)); }
-    #r360c-stick .r360c-up { top: 14px; transform: rotate(-135deg); }
-    #r360c-stick .r360c-down { bottom: 14px; transform: rotate(45deg); }
-    #r360c-stick .r360c-left { left: 14px; transform: rotate(135deg); }
-    #r360c-stick .r360c-right { right: 14px; transform: rotate(-45deg); }
-    #r360c-knob { position: absolute; border-radius: 50%; background: rgba(255,255,255,.35);
-      border: 2px solid rgba(255,255,255,.85); box-shadow: 0 0 18px rgba(255,255,255,.45);
-      opacity: 0; transition: opacity .1s; }
+    .r360c-gray  { --bg: 27,28,32;  --bd: 60,62,68; }
+    .r360c-amber { --bg: 52,40,22;  --bd: 120,94,48; }
+    .r360c-navy  { --bg: 18,26,40;  --bd: 44,60,86; }
+    .r360c-green { --bg: 16,32,27;  --bd: 40,74,60; }
+    .r360c-red   { --bg: 38,22,22;  --bd: 80,46,42; }
+    #r360c-stick { --bg: 27,28,32; --bd: 60,62,68; display: block; }
+    #r360c-stick .r360c-arrow { position: absolute; width: 9px; height: 9px; border: solid rgba(233,234,238,.92);
+      border-width: 0 1.6px 1.6px 0; }
+    #r360c-stick .r360c-label { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+      transition: opacity .1s; }
+    #r360c-knob { position: absolute; border-radius: 50%; background: rgba(233,234,238,.16);
+      border: 1px solid rgba(233,234,238,.45); opacity: 0; transition: opacity .1s; pointer-events: none; }
     #r360c-stick.r360c-active #r360c-knob { opacity: 1; }
+    #r360c-stick.r360c-active .r360c-label { opacity: 0; }
   `;
 
   // ------------------------------------------------------------------ input
@@ -152,7 +144,7 @@
   for (const spec of BUTTONS) {
     const button = document.createElement('button');
     button.type = 'button';
-    button.className = spec.cls;
+    button.className = `r360c-${spec.tint}${spec.face ? ' r360c-face' : ''}`;
     button.dataset.id = spec.id;
     button.textContent = spec.label;
     button.setAttribute('aria-label', `${spec.label}: ${spec.sub}`);
@@ -199,7 +191,7 @@
   stick.id = 'r360c-stick';
   stick.innerHTML = '<i class="r360c-arrow r360c-up"></i><i class="r360c-arrow r360c-down"></i>' +
     '<i class="r360c-arrow r360c-left"></i><i class="r360c-arrow r360c-right"></i>' +
-    '<div id="r360c-knob"></div>';
+    '<span class="r360c-label">Move</span><div id="r360c-knob"></div>';
   root.appendChild(stick);
   const knob = stick.querySelector('#r360c-knob');
   let stickPointer = null;
@@ -212,14 +204,15 @@
 
   function moveStick(event) {
     const rect = stick.getBoundingClientRect();
-    const radius = rect.width / 2;
-    let dx = event.clientX - (rect.left + radius);
-    let dy = event.clientY - (rect.top + radius);
-    const length = Math.hypot(dx, dy);
-    const max = radius - 30;
-    if (length > max) { dx = dx / length * max; dy = dy / length * max; }
-    knob.style.transform = `translate(${dx}px, ${dy}px)`;
-    const nx = dx / max, ny = dy / max;
+    const knobSize = knob.offsetWidth || 40;
+    const maxX = Math.max(10, rect.width / 2 - knobSize / 2 - 4);
+    const maxY = Math.max(10, rect.height / 2 - knobSize / 2 - 4);
+    let dx = event.clientX - (rect.left + rect.width / 2);
+    let dy = event.clientY - (rect.top + rect.height / 2);
+    let nx = dx / maxX, ny = dy / maxY;
+    const length = Math.hypot(nx, ny);
+    if (length > 1) { nx /= length; ny /= length; }
+    knob.style.transform = `translate(${nx * maxX}px, ${ny * maxY}px)`;
     const next = new Set();
     const dead = 0.32;
     if (ny < -dead) next.add('W');
@@ -254,57 +247,45 @@
   stick.addEventListener('lostpointercapture', endStick);
 
   // ------------------------------------------------------------------ layout
-  function place(el, x, y) {
-    el.style.left = `${Math.round(x)}px`;
-    el.style.top = `${Math.round(y)}px`;
-  }
-
   function layout() {
     const vv = window.visualViewport;
     const W = vv ? vv.width : window.innerWidth;
     const H = vv ? vv.height : window.innerHeight;
-    const cs = getComputedStyle(document.documentElement);
-    const safeL = parseFloat(cs.getPropertyValue('--safe-l')) || 0;
-    const safeR = parseFloat(cs.getPropertyValue('--safe-r')) || 0;
-    const L = Math.max(16, safeL + 8);
-    const R = W - Math.max(16, safeR + 8);
-    // Scale everything down a little on short landscape screens.
-    const s = Math.max(0.72, Math.min(1, H / 430));
+    // Same proportions on every screen; sizes follow the shorter scale so
+    // nothing overlaps when the page is wider or shorter than the reference.
+    const k = Math.max(0.75, Math.min(1.6, Math.min(W / REF_W, H / REF_H)));
+    root.style.fontSize = `${9 * k}px`;
+    const box = (el, spec) => {
+      const w = spec.w * k, h = spec.h * k;
+      // Anchor each control by its centre in the reference so scaling keeps
+      // the same spacing.
+      const cx = (spec.x + spec.w / REF_W / 2) * W;
+      const cy = (spec.y + spec.h / REF_H / 2) * H;
+      el.style.width = `${w}px`;
+      el.style.height = `${h}px`;
+      el.style.left = `${Math.round(cx - w / 2)}px`;
+      el.style.top = `${Math.round(cy - h / 2)}px`;
+    };
+    for (const spec of BUTTONS) box(elements[spec.id], spec);
 
-    const sz = (n) => n * s;
-    const size = (el, w, h) => { el.style.width = `${sz(w)}px`; el.style.height = `${sz(h)}px`; };
-
-    size(elements.pause, 96, 40); place(elements.pause, L, 12);
-    size(elements.back, 86, 40); size(elements.start, 86, 40);
-    place(elements.back, W / 2 - sz(86) - sz(54), 12);
-    place(elements.start, W / 2 + sz(54), 12);
-
-    size(elements.lb, 98, 42); size(elements.rb, 98, 42);
-    place(elements.rb, R - sz(98), 12);
-    place(elements.lb, R - sz(98) * 2 - sz(12), 12);
-
-    size(elements.lt, 132, 50); size(elements.rt, 132, 50);
-    place(elements.lt, L + sz(20), H * 0.42 - sz(25));
-    place(elements.rt, R - sz(132), H * 0.42 - sz(25));
-
-    const face = sz(64);
-    for (const id of ['a', 'b', 'x', 'y']) size(elements[id], 64, 64);
-    const cx = R - sz(64) - face / 2 - sz(16);
-    const cy = H - sz(28) - face * 1.5;
-    const gap = face * 0.95;
-    place(elements.y, cx - face / 2, cy - gap - face / 2);
-    place(elements.a, cx - face / 2, cy + gap - face / 2);
-    place(elements.x, cx - gap - face / 2, cy - face / 2);
-    place(elements.b, cx + gap - face / 2, cy - face / 2);
-
-    const st = sz(168);
-    stick.style.width = stick.style.height = `${st}px`;
-    knob.style.left = knob.style.top = `${(st - sz(60)) / 2}px`;
-    knob.style.width = knob.style.height = `${sz(60)}px`;
-    for (const arrow of stick.querySelectorAll('.r360c-arrow')) arrow.style.margin = '0';
-    stick.querySelector('.r360c-up').style.left = stick.querySelector('.r360c-down').style.left = `${st / 2 - 7}px`;
-    stick.querySelector('.r360c-left').style.top = stick.querySelector('.r360c-right').style.top = `${st / 2 - 7}px`;
-    place(stick, L + sz(30), H - st - sz(20));
+    box(stick, STICK);
+    stick.style.borderRadius = `${48 * k}px / ${46 * k}px`;
+    const sw = STICK.w * k, sh = STICK.h * k, a = 9 * k;
+    const arrows = {
+      up: [sw / 2 - a / 2, 12 * k, -135], down: [sw / 2 - a / 2, sh - 12 * k - a, 45],
+      left: [16 * k, sh / 2 - a / 2, 135], right: [sw - 16 * k - a, sh / 2 - a / 2, -45],
+    };
+    for (const [dir, [x, y, rot]] of Object.entries(arrows)) {
+      const el = stick.querySelector(`.r360c-${dir}`);
+      el.style.width = el.style.height = `${a}px`;
+      el.style.left = `${x}px`;
+      el.style.top = `${y}px`;
+      el.style.transform = `rotate(${rot}deg)`;
+    }
+    const kn = 40 * k;
+    knob.style.width = knob.style.height = `${kn}px`;
+    knob.style.left = `${(sw - kn) / 2}px`;
+    knob.style.top = `${(sh - kn) / 2}px`;
   }
 
   // ------------------------------------------------------------------ state
