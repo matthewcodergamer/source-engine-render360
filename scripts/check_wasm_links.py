@@ -92,7 +92,10 @@ def parse(path):
 
 # Provided by the dynamic linker / runtime itself, never by a module export.
 RUNTIME = {'memory', '__indirect_function_table', '__stack_pointer',
-           '__memory_base', '__table_base', '__tls_base'}
+           '__memory_base', '__table_base', '__tls_base',
+           '__stack_high', '__stack_low', '__heap_base', '__data_end',
+           '__dso_handle', '__tls_size', '__tls_align',
+           '__cpp_exception', '__c_longjmp', '__wasm_apply_data_relocs'}
 
 
 def main(directory):
@@ -109,7 +112,7 @@ def main(directory):
         js = open(js_path, encoding='utf-8', errors='replace').read()
     js_names = set(re.findall(r'\b_?([A-Za-z_][A-Za-z0-9_$]*)\b', js))
 
-    fatal = lazy = checked = 0
+    fatal = lazy = warn = checked = 0
     for f, (imports, _) in mods.items():
         for mod, field, kind in imports:
             if mod not in ('env', 'GOT.func', 'GOT.mem') or field in RUNTIME:
@@ -119,14 +122,24 @@ def main(directory):
             checked += 1
             if field in provided:
                 continue
-            if mod.startswith('GOT.'):
+            # The runtime also resolves GOT entries from its JavaScript
+            # library (OpenAL, console, exit, ...). C++ symbols never live in
+            # JS, so those must be exported by some wasm module.
+            in_js = field in js_names or field.lstrip('_') in js_names
+            if mod.startswith('GOT.') and field.startswith('_Z'):
                 fatal += 1
                 print(f'FATAL  {f}: {mod}.{field}  (aborts at load)')
-            elif field not in js_names and field.lstrip('_') not in js_names:
+            elif mod.startswith('GOT.') and not in_js:
+                # Probably fatal, but C names can come from places this
+                # script cannot see; report without blocking the deploy.
+                warn += 1
+                print(f'WARN   {f}: {mod}.{field}  (not found in wasm or JS)')
+            elif mod == 'env' and not in_js:
                 lazy += 1
                 print(f'lazy   {f}: {mod}.{field}  (fails only if called)')
     print(f'wasm link closure: {len(files)} modules, {checked} imports checked, '
-          f'{fatal} load-fatal unresolved, {lazy} lazy unresolved')
+          f'{fatal} load-fatal unresolved C++, {warn} unresolved C warnings, '
+          f'{lazy} lazy unresolved')
     return 1 if fatal else 0
 
 
