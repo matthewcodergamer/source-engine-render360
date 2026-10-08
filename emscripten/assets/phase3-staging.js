@@ -128,6 +128,10 @@
     }
     document.documentElement.style.overflow = '';
     document.body.style.overflow = '';
+    try {
+      if(document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(() => {});
+      else if(document.webkitFullscreenElement && document.webkitExitFullscreen) document.webkitExitFullscreen();
+    } catch(_) {}
   }
 
   function launchDirectVPK() {
@@ -139,40 +143,33 @@
 
     closeRuntime();
     markFreshLaunch();
+    try {
+      const root = document.documentElement;
+      const request = root.requestFullscreen || root.webkitRequestFullscreen;
+      if(typeof request === 'function') Promise.resolve(request.call(root)).catch(() => {});
+    } catch(_) {}
     globalThis.render360Phase3DirectSelected = true;
     setPhase3Status(`Starting Phase 3. ${RESIDENCY_POLICY}.`);
 
+    // The game owns the whole screen: no header, no borders. The in-game menu
+    // (and its Quit button) lives inside the launcher page itself.
     const overlay = document.createElement('div');
     overlay.id = 'render360Phase3Runtime';
-    overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483000;background:#050607;display:flex;flex-direction:column;padding-top:env(safe-area-inset-top);';
-
-    const bar = document.createElement('div');
-    bar.style.cssText = 'height:48px;flex:0 0 48px;display:flex;align-items:center;gap:10px;padding:6px 10px;background:rgba(14,16,20,.94);border-bottom:1px solid rgba(255,255,255,.08);font:13px -apple-system,BlinkMacSystemFont,system-ui;color:#dfe5ed;';
-
-    const back = document.createElement('button');
-    back.type = 'button';
-    back.textContent = 'Exit';
-    back.style.cssText = 'appearance:none;border:0;border-radius:10px;padding:8px 12px;background:#f4f7fb;color:#101318;font-weight:700;';
-    back.addEventListener('click', closeRuntime);
-
-    const label = document.createElement('span');
-    label.textContent = `Phase 3 · current-map-only · ${stats.vpks} VPKs + ${stats.maps} map files browser-backed · no future-map prefetch`;
-    label.style.cssText = 'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
-    bar.append(back, label);
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483000;background:#000;';
 
     const frame = document.createElement('iframe');
     frame.id = 'render360Phase3Frame';
-    frame.title = 'Render360 Portal Phase 3 runtime';
+    frame.title = 'Portal';
     // Use both the modern Permissions Policy and legacy iframe fullscreen flags.
     // Safari/iOS implementations have shipped both code paths over time.
     frame.allow = 'fullscreen; autoplay; gamepad';
     frame.allowFullscreen = true;
     frame.setAttribute('allowfullscreen', '');
     frame.setAttribute('webkitallowfullscreen', '');
-    frame.style.cssText = 'border:0;width:100%;flex:1 1 auto;min-height:0;background:#111;';
+    frame.style.cssText = 'position:absolute;inset:0;border:0;width:100%;height:100%;display:block;background:#000;';
     frame.src = './hl2_launcher.html?render360Phase3=' + Date.now();
 
-    overlay.append(bar, frame);
+    overlay.append(frame);
     document.body.appendChild(overlay);
     document.documentElement.style.overflow = 'hidden';
     document.body.style.overflow = 'hidden';
@@ -207,6 +204,10 @@
     if(event.origin !== location.origin) return;
     if(!runtimeFrame || event.source !== runtimeFrame.contentWindow) return;
     const data = event?.data;
+    if(data && data.type === 'render360-exit') {
+      closeRuntime();
+      return;
+    }
     if(!data || data.type !== REQUEST_TYPE || !data.token) return;
     const stats = summarize(retailDescriptors);
     if(!stats.gameinfo || !stats.background1 || !stats.dirs || !stats.vpks) return;
