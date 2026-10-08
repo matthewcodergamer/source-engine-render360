@@ -561,9 +561,20 @@ function render360NeededLibs(bytes) {
 	return out
 }
 
+function render360SharedModule(name) {
+	try {
+		if(typeof sharedModules !== 'undefined' && sharedModules && sharedModules[name]) return sharedModules[name]
+	} catch(_) {}
+	return null
+}
+
 async function render360EnsureModuleFile(name, seen) {
 	if(seen.has(name)) return
 	seen.add(name)
+	// Already compiled once on this thread and handed to every Worker: dlopen
+	// takes it straight from sharedModules, so the raw bytes are not needed
+	// in MEMFS or (via dso->file_data) in the Wasm heap.
+	if(render360SharedModule(name)) return
 	const path = '/' + name
 	try { FS.stat(path); return } catch(_) {}
 
@@ -591,3 +602,101 @@ Module.render360FetchModule = (lock, name) => {
 
 // Exposed for tests.
 globalThis.render360NeededLibs = render360NeededLibs
+
+// ---------------------------------------------------------------------------
+// Compile every engine module ONCE and share it with all threads.
+//
+// Source dlopen()s its modules from the PROXY_TO_PTHREAD application thread.
+// Emscripten only shares a compiled module with other Workers when the
+// browser's main thread loaded it (libdylink.js postInstantiation ->
+// sharedModules), which never happens for a dlopen made on a pthread. Every
+// engine thread (4 on iPhone: app, file I/O, texture loader, texture reader)
+// therefore copied the module out of the Wasm heap and compiled its own
+// private copy, all at the same moment. For libserver.so (11.5 MB) that burst
+// is where iOS killed the page.
+//
+// Instead, before main() runs, the main thread fetches and compiles each
+// module once, keeps the compiled WebAssembly.Module in sharedModules (new
+// Workers receive it in their 'load' message) and posts it to the Workers
+// that already exist. A WebAssembly.Module sent to a Worker shares its
+// compiled code instead of compiling again, and loadLibData() returns it
+// before ever looking for file bytes.
+const RENDER360_NOT_PRECOMPILED = new Set([
+	'liblauncher.so',        // loaded by the main thread via dynamicLibraries
+	'libsourcevr.so',
+	'libvideo_bink.so',
+	'libvideo_webm.so',
+	'libvideo_quicktime.so',
+	'libstdshader_dbg.so',
+	'libstdshader_dx6.so',
+	'libstdshader_dx7.so',
+	'libstdshader_dx8.so',
+])
+
+if(!render360IsWindow && typeof self !== 'undefined' && typeof self.addEventListener === 'function') {
+	// No 'cmd' key, so Emscripten's own handler ignores this message silently.
+	self.addEventListener('message', event => {
+		const modules = event?.data?.render360SharedModules
+		if(!modules || typeof sharedModules === 'undefined' || !sharedModules) return
+		for(const name of Object.keys(modules)) sharedModules[name] = modules[name]
+	})
+}
+
+function render360ShareModulesWithWorkers(modules) {
+	if(typeof PThread === 'undefined' || !PThread) return 0
+	const workers = [].concat(PThread.unusedWorkers || [], PThread.runningWorkers || [])
+	for(const worker of workers) {
+		try { worker.postMessage({ render360SharedModules: modules }) } catch(error) {
+			Module.printErr?.(`[Render360] could not share modules with a worker: ${error?.message || error}`)
+		}
+	}
+	return workers.length
+}
+
+async function render360PrecompileModules() {
+	if(typeof sharedModules === 'undefined' || !sharedModules) {
+		Module.print?.('[Render360] sharedModules unavailable; modules load per thread')
+		return
+	}
+	let names = []
+	try {
+		const response = await fetch('render360-wasm-side-modules.txt', { cache: 'no-store', credentials: 'same-origin' })
+		if(response.ok) names = (await response.text()).split(/\s+/).filter(name => /\.so$/.test(name))
+	} catch(_) {}
+	names = names.filter(name => !RENDER360_NOT_PRECOMPILED.has(name) && !sharedModules[name])
+
+	const compiled = {}
+	let bytesTotal = 0
+	for(let i = 0; i < names.length; i++) {
+		const name = names[i]
+		render360SetPhase(`module-compile:${name}`)
+		try { Module.setStatus?.(`Preparing Portal (${i}/${names.length})`) } catch(_) {}
+		try {
+			const response = await fetch(name, { credentials: 'same-origin' })
+			if(!response.ok) throw new Error(`HTTP ${response.status}`)
+			let buffer = await response.arrayBuffer()
+			bytesTotal += buffer.byteLength
+			const module = await WebAssembly.compile(buffer)
+			buffer = null
+			sharedModules[name] = module
+			compiled[name] = module
+		} catch(error) {
+			// Not fatal: this module falls back to the per-thread path.
+			Module.printErr?.(`[Render360] precompile skipped ${name}: ${error?.message || error}`)
+		}
+	}
+	const workers = render360ShareModulesWithWorkers(compiled)
+	try { Module.setStatus?.(`Preparing Portal (${names.length}/${names.length})`) } catch(_) {}
+	Module.print?.(`[Render360] compiled ${Object.keys(compiled).length}/${names.length} modules once (${(bytesTotal / 1048576).toFixed(1)} MiB) and shared them with ${workers} workers`)
+	render360SetPhase('modules-shared')
+}
+
+if(render360IsWindow && !render360ProbableProcessReload) {
+	Module['preRun'] = Module['preRun'] || []
+	Module['preRun'].push(() => {
+		addRunDependency('render360-precompile-modules')
+		render360PrecompileModules()
+			.catch(error => Module.printErr?.(`[Render360] module precompile failed: ${error?.stack || error}`))
+			.finally(() => removeRunDependency('render360-precompile-modules'))
+	})
+}

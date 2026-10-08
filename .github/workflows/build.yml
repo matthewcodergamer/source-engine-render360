@@ -164,6 +164,9 @@ jobs:
           test -s build/install/libclient.so
           test -s build/install/libserver.so
           grep -a -q 'probable-process-kill-reload' build/install/hl2_launcher.js
+          grep -a -q 'render360SharedModules' build/install/hl2_launcher.js
+          grep -a -q 'sharedModules' build/install/hl2_launcher.js
+          test -s build/install/render360-wasm-side-modules.txt
           grep -a -q 'render360-direct-vpk' build/install/hl2_launcher.js
           grep -a -q 'WORKERFS' build/install/hl2_launcher.js
           test -s emscripten/portal-local-vpk.js
