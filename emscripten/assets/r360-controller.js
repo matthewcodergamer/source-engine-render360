@@ -60,7 +60,8 @@
       display: flex; align-items: center; justify-content: center; line-height: 1;
       transition: transform .06s ease, background-color .06s ease, border-color .06s ease; }
     #r360c button { border-radius: 999px; }
-    #r360c button.r360c-face { border-radius: 50%; }
+    /* Face buttons are short pills (50x41), not circles or ellipses. */
+    #r360c button.r360c-face { border-radius: 999px; }
     #r360c button.r360c-down { transform: scale(.94); background: rgba(var(--bd), .7); border-color: rgba(255,255,255,.55); }
     #r360c.r360c-menu button:not([data-id="pause"]) { display: none; }
     #r360c.r360c-menu #r360c-stick { display: none; }
