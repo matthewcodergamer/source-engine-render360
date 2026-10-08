@@ -377,11 +377,6 @@
     }
   }
 
-  try {
-    if(typeof diagnosticStatusElement !== 'undefined' && diagnosticStatusElement) {
-      diagnosticStatusElement.textContent = 'Latest runtime event + bounded startup trace'
-    }
-  } catch(_) {}
 
   function fullscreenButton() {
     try {
@@ -411,7 +406,9 @@
 
     const parentDoc = frame.ownerDocument
     const overlay = frame.parentElement
-    const bar = overlay?.firstElementChild
+    // Only an explicitly marked header is hidden. The current staging overlay
+    // has none: the iframe itself is the first child and must stay visible.
+    const bar = overlay?.querySelector?.('[data-render360-bar]') || null
 
     if(active) {
       if(overlay) {

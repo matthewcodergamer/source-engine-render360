@@ -38,7 +38,8 @@ const render360CrashState = {
 	updatedAt: render360Now,
 	wasmHeapBytes: render360ProbableProcessReload ? Number(render360PreviousState?.wasmHeapBytes || 0) : 0,
 	memfsBytes: render360ProbableProcessReload ? Number(render360PreviousState?.memfsBytes || 0) : 0,
-	memfsFiles: render360ProbableProcessReload ? Number(render360PreviousState?.memfsFiles || 0) : 0
+	memfsFiles: render360ProbableProcessReload ? Number(render360PreviousState?.memfsFiles || 0) : 0,
+	threads: render360ProbableProcessReload ? Number(render360PreviousState?.threads || 0) : 0
 }
 
 // A deliberate fresh launch should not carry an error from an older attempt.
@@ -70,8 +71,46 @@ function render360WriteCrashState(state) {
 	}
 }
 
+// Running Web Workers. Every engine thread is a Worker that instantiates every
+// loaded SIDE_MODULE again, so this is the number to watch next to the heap.
+function render360ReadThreadCount() {
+	try {
+		if(typeof PThread !== 'undefined' && PThread?.runningWorkers) return PThread.runningWorkers.length
+	} catch(_) {}
+	return 0
+}
+
+// The last few engine log lines, kept in memory and written to localStorage on
+// the 3 s heartbeat. When Safari kills the page there is no exception to catch;
+// this tail is the only record of what the engine was doing at the time.
+const RENDER360_LOG_TAIL_KEY = 'render360-ios-log-tail-v1'
+const RENDER360_LOG_TAIL_LINES = 40
+const render360LogTail = []
+let render360LogTailDirty = false
+function render360RememberLine(text) {
+	const line = String(text || '').trim()
+	if(!line) return
+	render360LogTail.push(`${((Date.now() - render360Now) / 1000).toFixed(1)}s ${line.slice(0, 300)}`)
+	if(render360LogTail.length > RENDER360_LOG_TAIL_LINES) render360LogTail.splice(0, render360LogTail.length - RENDER360_LOG_TAIL_LINES)
+	render360LogTailDirty = true
+}
+function render360FlushLogTail() {
+	if(!render360IsWindow || !render360LogTailDirty) return
+	render360LogTailDirty = false
+	try { localStorage.setItem(RENDER360_LOG_TAIL_KEY, JSON.stringify(render360LogTail)) } catch(_) {}
+}
+globalThis.render360ReadLogTail = () => {
+	if(render360LogTail.length) return render360LogTail.slice()
+	try { return JSON.parse(localStorage.getItem(RENDER360_LOG_TAIL_KEY) || '[]') } catch(_) { return [] }
+}
+if(render360IsWindow && !render360ProbableProcessReload) {
+	// A fresh launch must not show the tail of an older run.
+	try { localStorage.removeItem(RENDER360_LOG_TAIL_KEY) } catch(_) {}
+}
+
 function render360PersistCrashState() {
 	render360CrashState.updatedAt = Date.now()
+	render360CrashState.threads = render360ReadThreadCount() || Number(render360CrashState.threads || 0)
 	render360CrashState.wasmHeapBytes = render360ReadWasmHeapBytes()
 	render360CrashState.memfsBytes = Number(Module.render360ResidentBytes || 0)
 	render360CrashState.memfsFiles = Number(Module.render360ResidentFiles || 0)
@@ -112,6 +151,7 @@ if(render360IsWindow && render360CrashChannel) {
 		render360CrashState.wasmHeapBytes = Number(incoming.wasmHeapBytes || render360CrashState.wasmHeapBytes || 0)
 		render360CrashState.memfsBytes = Number(incoming.memfsBytes || render360CrashState.memfsBytes || 0)
 		render360CrashState.memfsFiles = Number(incoming.memfsFiles || render360CrashState.memfsFiles || 0)
+		render360CrashState.threads = render360ReadThreadCount() || Number(render360CrashState.threads || 0)
 		try { localStorage.setItem(RENDER360_IOS_CRASH_STATE_KEY, JSON.stringify(render360CrashState)) } catch(_) {}
 	})
 }
@@ -123,7 +163,7 @@ if(render360ProbableProcessReload) {
 	setTimeout(() => {
 		const heap = Math.round(Number(render360CrashState.wasmHeapBytes || 0) / 1048576)
 		const memfs = Math.round(Number(render360CrashState.memfsBytes || 0) / 1048576)
-		const message = `[Render360 iOS guard] Safari restarted this launcher after a probable WebContent/GPU process kill. Last phase=${render360CrashState.phase || 'unknown'}, wasmHeap=${heap} MiB, trackedMEMFS=${memfs} MiB. Use Copy diagnostics, then return to the staging page for a deliberate fresh launch.`
+		const message = `[Render360 iOS guard] Safari restarted this launcher after a probable WebContent/GPU process kill. Last phase=${render360CrashState.phase || 'unknown'}, wasmHeap=${heap} MiB, trackedMEMFS=${memfs} MiB, threads=${Number(render360CrashState.threads || 0)}. Use Copy diagnostics, then return to the staging page for a deliberate fresh launch.`
 		Module.printErr?.(message)
 		if(typeof statusElement !== 'undefined' && statusElement) statusElement.textContent = message
 		if(typeof spinnerElement !== 'undefined' && spinnerElement) spinnerElement.style.display = 'none'
@@ -146,10 +186,12 @@ function render360ObserveRuntimeLine(args) {
 }
 Module.print = (...args) => {
 	render360ObserveRuntimeLine(args)
+	render360RememberLine(args.join(' '))
 	render360OriginalPrint(...args)
 }
 Module.printErr = (...args) => {
 	render360ObserveRuntimeLine(args)
+	render360RememberLine(args.join(' '))
 	render360OriginalPrintErr(...args)
 }
 
@@ -157,6 +199,7 @@ let render360Heartbeat = 0
 if(render360IsWindow) {
 	render360Heartbeat = setInterval(() => {
 		if(render360CrashState.active) render360PersistCrashState()
+		render360FlushLogTail()
 	}, 3000)
 	window.addEventListener('pagehide', () => {
 		if(render360Heartbeat) clearInterval(render360Heartbeat)
@@ -166,6 +209,7 @@ if(render360IsWindow) {
 			render360CrashState.interruption = null
 			render360PersistCrashState()
 		}
+		render360FlushLogTail()
 		try { render360CrashChannel?.close() } catch(_) {}
 	}, { once: true })
 }
@@ -209,8 +253,34 @@ Module['arguments'].push(
 if(render360IsWindow) {
 	let coarsePointer = false
 	try { coarsePointer = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches) } catch(_) {}
-	if(navigator.maxTouchPoints > 0 && coarsePointer) {
+	const phone = navigator.maxTouchPoints > 0 && coarsePointer
+	if(phone) {
 		Module['arguments'].push('+touch_enable', '1', '+touch_draw', '1')
+		// Quarter-size textures. On a 6 inch screen the difference is hard to
+		// see, and textures are the largest thing a map load adds to both the
+		// Wasm heap and GPU memory, which is where iOS kills the page.
+		Module['arguments'].push('+mat_picmip', '2')
+	}
+
+	// Render at the shape of the screen, so the game fills it edge to edge
+	// instead of sitting in a 4:3 box. Phones always play in landscape, so use
+	// the long side as width even when the page is opened in portrait. The
+	// short side is capped: every extra pixel costs fill rate and memory.
+	let longSide = 0
+	let shortSide = 0
+	try {
+		const w = phone ? screen.width : window.innerWidth
+		const h = phone ? screen.height : window.innerHeight
+		longSide = Math.max(w, h)
+		shortSide = Math.min(w, h)
+	} catch(_) {}
+	if(longSide > 0 && shortSide > 0) {
+		const dpr = Math.max(1, Number(window.devicePixelRatio || 1))
+		const height = Math.max(360, Math.min(phone ? 540 : 720, Math.round(shortSide * dpr)))
+		const width = Math.round(height * longSide / shortSide / 2) * 2
+		Module.render360GameSize = { width, height }
+		Module['arguments'].push('-w', String(width), '-h', String(height))
+		try { globalThis.render360Layout?.() } catch(_) {}
 	}
 }
 
