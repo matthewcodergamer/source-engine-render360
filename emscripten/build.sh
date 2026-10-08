@@ -394,3 +394,6 @@ du -ch build/install/*.so | tail -n 1 || true
 
 cp build/launcher_main/hl2_launcher.* build/install/
 cp -r emscripten/assets build/install/
+# Fallback fonts for vgui's system-font lookups (pre.js writes them to
+# /platform/resource/linux_fonts); retail Windows Portal does not ship them.
+cp -r emscripten/fonts build/install/

@@ -226,6 +226,7 @@
         <button type="button" class="r360-row" onclick="render360OpenSheet(false)">Resume</button>
         <div class="r360-sep"></div>
         <span id="r360-fullscreen-row"><input type="button" class="r360-row" value="Fullscreen" onclick="render360OpenSheet(false); render360RequestFullscreen()"></span>
+        <button type="button" class="r360-row" id="r360-controller-row" onclick="render360OpenSheet(false); window.render360ToggleController && render360ToggleController()">Show controller</button>
         <button type="button" class="r360-row" onclick="render360CopyDiagnostics()">Copy diagnostics</button>
         <div id="render360_diagnostic_status">Shares the engine log with the developer</div>
         <div class="r360-sep"></div>
@@ -258,6 +259,9 @@
         var el = document.documentElement;
         if (!(el.requestFullscreen || el.webkitRequestFullscreen)) {
           document.getElementById('r360-fullscreen-row').hidden = true;
+        }
+        if (!render360Touch) {
+          document.getElementById('r360-controller-row').hidden = true;
         }
       })();
 
@@ -324,6 +328,7 @@
       // gets that far, lift the loading screen and let the game's own loading
       // panel take over.
       function render360WatchStartup(line) {
+        try { if (window.render360ControllerSeeLine) window.render360ControllerSeeLine(line); } catch (_) {}
         if (/filesystem BaseDir|IDirect3DDevice9::Create|create-ready:shaderapi|Precache:/i.test(line)) {
           render360HideSplash(1500);
         }
@@ -552,6 +557,7 @@
           'This page is not cross-origin isolated, so threads are unavailable. Open it from the Portal start page, not a Private tab.');
       }
     </script>
+    <script src="assets/r360-controller.js"></script>
     {{{ SCRIPT }}}
   </body>
 </html>

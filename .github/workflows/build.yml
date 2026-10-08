@@ -167,6 +167,11 @@ jobs:
           grep -a -q 'render360SharedModules' build/install/hl2_launcher.js
           grep -a -q 'sharedModules' build/install/hl2_launcher.js
           test -s build/install/render360-wasm-side-modules.txt
+          test -s build/install/fonts/dejavusans.ttf
+          test -s build/install/fonts/dejavusans-bold.ttf
+          test -s build/install/fonts/dejavusansmono.ttf
+          test -s build/install/assets/r360-controller.js
+          grep -q 'assets/r360-controller.js' build/install/hl2_launcher.html
           grep -a -q 'render360-direct-vpk' build/install/hl2_launcher.js
           grep -a -q 'WORKERFS' build/install/hl2_launcher.js
           test -s emscripten/portal-local-vpk.js
