@@ -106,6 +106,7 @@ private:
 	int			m_pauseCount;
 	int			m_readPos;
 	int			m_partialWrite;
+	int			m_paintedEnd;		// web: last sample time written into the ring
 
 	// Memory for the wave data
 	uint8_t		*m_pBuffer;
@@ -169,6 +170,7 @@ bool CAudioDeviceSDLAudio::Init( void )
 	m_pBuffer = NULL;
 	m_readPos = 0;
 	m_partialWrite = 0;
+	m_paintedEnd = 0;
 	m_devId = 0;
 
 	OpenWaveOut();
@@ -241,11 +243,11 @@ void CAudioDeviceSDLAudio::OpenWaveOut( void )
 	// same 'callHandler' message Emscripten's own proxying understands.
 	EM_ASM({
 		if (typeof ENVIRONMENT_IS_PTHREAD !== 'undefined' && ENVIRONMENT_IS_PTHREAD) {
-			postMessage({ cmd: 'callHandler', handler: 'render360AudioStart', args: [$0, $1, $2, $3, $4] });
+			postMessage({ cmd: 'callHandler', handler: 'render360AudioStart', args: [$0, $1, $2, $3, $4, $5] });
 		} else if (Module.render360AudioStart) {
-			Module.render360AudioStart($0, $1, $2, $3, $4);
+			Module.render360AudioStart($0, $1, $2, $3, $4, $5);
 		}
-	}, m_pBuffer, WAV_BUFFER_SIZE * WAV_BUFFERS, &m_readPos, &m_pauseCount, SOUND_DMA_SPEED);
+	}, m_pBuffer, WAV_BUFFER_SIZE * WAV_BUFFERS, &m_readPos, &m_pauseCount, SOUND_DMA_SPEED, &m_paintedEnd);
 	DevMsg( "Render360: web audio ring %d bytes at %d Hz\n", WAV_BUFFER_SIZE * WAV_BUFFERS, SOUND_DMA_SPEED );
 	return;
 #endif
@@ -597,6 +599,12 @@ void CAudioDeviceSDLAudio::TransferSamples( int end )
 	if ( m_pBuffer )
 	{
 		S_TransferStereo16( m_pBuffer, PAINTBUFFER, lpaintedtime, endtime );
+#ifdef __EMSCRIPTEN__
+		// Published after the samples are in the ring: the web reader never
+		// plays past this point, so a slow frame is a short gap instead of
+		// the stale ring looping (a buzz).
+		__atomic_store_n( &m_paintedEnd, endtime, __ATOMIC_RELEASE );
+#endif
 	}
 }
 

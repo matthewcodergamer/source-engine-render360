@@ -95,13 +95,15 @@ let render360LogTailDirty = false
 function render360RememberLine(text) {
 	const line = String(text || '').trim()
 	if(!line) return
+	// Crash stacks are long and are the whole point; keep them intact.
+	const limit = line.startsWith('[Render360 worker stack]') ? 3000 : 300
 	if(RENDER360_NOTABLE_RE.test(line) && render360Notable.length < 60) {
 		const last = render360Notable[render360Notable.length - 1]
-		if(!last || !last.endsWith(line.slice(0, 300))) {
-			render360Notable.push(`${((Date.now() - render360Now) / 1000).toFixed(1)}s ${line.slice(0, 300)}`)
+		if(!last || !last.endsWith(line.slice(0, limit))) {
+			render360Notable.push(`${((Date.now() - render360Now) / 1000).toFixed(1)}s ${line.slice(0, limit)}`)
 		}
 	}
-	render360LogTail.push(`${((Date.now() - render360Now) / 1000).toFixed(1)}s ${line.slice(0, 300)}`)
+	render360LogTail.push(`${((Date.now() - render360Now) / 1000).toFixed(1)}s ${line.slice(0, limit)}`)
 	if(render360LogTail.length > RENDER360_LOG_TAIL_LINES) render360LogTail.splice(0, render360LogTail.length - RENDER360_LOG_TAIL_LINES)
 	render360LogTailDirty = true
 }
@@ -295,7 +297,10 @@ Module['arguments'].push(
 	// itself whenever it believes the window is in the background.
 	'+snd_mute_losefocus', '0',
 	// Full scale is harsh on a phone speaker; still adjustable in Options.
-	'+volume', '0.7'
+	'+volume', '0.7',
+	// Paint further ahead than the desktop 0.1 s: phone frames are slower,
+	// and the ring holds 0.37 s.
+	'+snd_mixahead', '0.25'
 )
 
 // A phone has no keyboard and iOS has never shipped Pointer Lock, so the
@@ -316,14 +321,10 @@ if(render360IsWindow) {
 		// see, and textures are the largest thing a map load adds to both the
 		// Wasm heap and GPU memory, which is where iOS kills the page.
 		Module['arguments'].push('+mat_picmip', '2')
-		// Graphics memory is the next limit after the Wasm heap: the first
-		// iPhone run that reached the menu lost its WebGL context while the
-		// engine was caching materials. Normal maps double the texture memory
-		// of almost every Portal surface, specular cubemaps and shadow render
-		// targets add more, and none of it is worth a lost context on a phone.
+		// Cheaper rendering features for a phone GPU. Bump maps and specular
+		// stay on: turning them off makes Portal's materials ask for a
+		// $bumpmap texture that is not loaded (console errors).
 		Module['arguments'].push(
-			'+mat_bumpmap', '0',
-			'+mat_specular', '0',
 			'+r_shadowrendertotexture', '0',
 			'+r_flashlightdepthtexture', '0',
 			'+r_waterforceexpensive', '0',
@@ -827,7 +828,9 @@ if(render360IsWindow && !render360ProbableProcessReload) {
 if(!render360IsWindow && typeof self !== 'undefined' && typeof self.addEventListener === 'function') {
 	self.addEventListener('error', event => {
 		const error = event?.error
-		const stack = String(error?.stack || '').split('\n').slice(0, 24).join(' | ')
+		const stack = String(error?.stack || '').split('\n').slice(0, 40)
+			.map(frame => frame.replace(/@\[wasm code\]$/, '').replace(/^(\d+)@wasm-function\[\1\]$/, 'f$1'))
+			.join(' | ')
 		render360Log(`[Render360 worker stack] ${error?.message || event?.message || 'error'} :: ${stack || '<no stack>'}`)
 	})
 }
@@ -925,6 +928,7 @@ if(render360IsWindow) {
 				this.i16 = new Int16Array(d.sab);
 				this.i32 = new Int32Array(d.sab);
 				this.frac = 0;
+				this.abs = 0;
 			};
 		}
 		process(inputs, outputs) {
@@ -938,11 +942,16 @@ if(render360IsWindow) {
 			const frames = c.bytes >> 2;
 			const base = c.buf >> 1;
 			const step = c.rate / sampleRate;
-			let pos = Atomics.load(this.i32, c.readIdx);
-			if (pos < 0 || pos >= c.bytes) pos = 0;
-			let frame = pos >> 2;
+			// Absolute sample time read so far (the engine's "soundtime") and
+			// the time the engine has finished writing up to. Never play past
+			// what was written: replaying stale ring contents is a buzz.
+			const painted = c.paintedIdx >= 0 ? Atomics.load(this.i32, c.paintedIdx) : 0x7fffffff;
+			if (painted < this.abs - frames) this.abs = painted;        // engine restarted its clock
+			let frame = this.abs % frames;
 			let frac = this.frac;
-			for (let i = 0; i < L.length; i++) {
+			let i = 0;
+			for (; i < L.length; i++) {
+				if (this.abs + 1 >= painted) break;
 				const next = frame + 1 === frames ? 0 : frame + 1;
 				const a = base + frame * 2, b = base + next * 2;
 				const l0 = this.i16[a], r0 = this.i16[a + 1];
@@ -952,7 +961,9 @@ if(render360IsWindow) {
 				const whole = frac | 0;
 				frac -= whole;
 				frame = (frame + whole) % frames;
+				this.abs += whole;
 			}
+			for (; i < L.length; i++) { L[i] = 0; if (R !== L) R[i] = 0; }
 			this.frac = frac;
 			Atomics.store(this.i32, c.readIdx, frame << 2);
 			return true;
@@ -977,10 +988,11 @@ if(render360IsWindow) {
 		else resumeAudio()
 	})
 
-	Module.render360AudioStart = (buf, bytes, readPosPtr, pausePtr, rate) => {
+	Module.render360AudioStart = (buf, bytes, readPosPtr, pausePtr, rate, paintedPtr) => {
 		try { if(navigator.audioSession) navigator.audioSession.type = 'playback' } catch(_) {}
 		const sab = (typeof wasmMemory !== 'undefined' && wasmMemory) ? wasmMemory.buffer : HEAP8.buffer
-		const config = { sab, buf, bytes, readIdx: readPosPtr >> 2, pauseIdx: pausePtr >> 2, rate }
+		const config = { sab, buf, bytes, readIdx: readPosPtr >> 2, pauseIdx: pausePtr >> 2, rate,
+			paintedIdx: paintedPtr ? paintedPtr >> 2 : -1 }
 		const AC = window.AudioContext || window.webkitAudioContext
 		if(!AC) { Module.printErr?.('[Render360 audio] Web Audio unavailable'); return }
 		let ctx

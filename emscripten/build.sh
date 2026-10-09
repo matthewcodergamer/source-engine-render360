@@ -372,12 +372,12 @@ echo "Render360 Portal: required filesystem/engine/ToGL module set present"
 # forwards them to the Source pthread where WORKERFS exposes them read-only.
 # Source then opens the retail VPKs and performs its own range reads on demand.
 # WORKERFS is not part of the default JS filesystem, so link it explicitly.
-EMCC_FORCE_STDLIBS=libc,libc++,libc++abi emcc -Os \
+EMCC_FORCE_STDLIBS=libc,libc++,libc++abi emcc -Os --profiling-funcs \
 	-sUSE_BZIP2=1 -sUSE_SDL=2 -sUSE_FREETYPE=1 -sUSE_LIBJPEG=1 -sUSE_LIBPNG -sMALLOC=dlmalloc \
 	-sMAIN_MODULE -sINCLUDE_FULL_LIBRARY=1 \
 	-sINITIAL_MEMORY=384mb -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=1024mb -sMEMORY_GROWTH_LINEAR_STEP=32mb \
 	-sSHARED_MEMORY=1 -sUSE_PTHREADS -sPTHREAD_POOL_SIZE=2 -sPTHREAD_POOL_SIZE_STRICT=0 \
-	-sFULL_ES3 -sSTACK_SIZE=4mb -sDEFAULT_PTHREAD_STACK_SIZE=1mb --shell-file=emscripten/shell.html \
+	-sFULL_ES3 -sSTACK_SIZE=16mb -sDEFAULT_PTHREAD_STACK_SIZE=1mb --shell-file=emscripten/shell.html \
 	-sASSERTIONS=1 -sSTACK_OVERFLOW_CHECK=1 \
 	-sPROXY_TO_PTHREAD -sOFFSCREENCANVASES_TO_PTHREAD="#canvas" -sOFFSCREENCANVAS_SUPPORT=1 \
 	-lworkerfs.js \

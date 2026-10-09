@@ -559,6 +559,9 @@ def configure(conf):
 		# (e.g. CThread::Start from tier0), so it aborted at load with
 		# "undefined symbol". It only saved ~5% anyway.
 		linkflags += ['-sSIDE_MODULE=1', '-Wl,--allow-multiple-definition']
+		# Keep function names in the shipped modules so Safari's Wasm stack
+		# traces name the failing code on iPhone (diagnostics), not wasm-function[N].
+		linkflags += ['--profiling-funcs']
 		flags += ['-sFULL_ES3', '-sMALLOC=mimalloc']
 
 	if conf.env.DEST_OS == 'freebsd':

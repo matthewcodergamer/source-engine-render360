@@ -105,6 +105,7 @@
 		let count = 0
 		let bytes = 0
 		let vpkPlaceholders = 0
+		let loosePlaceholders = 0
 		let hasPortalGameInfo = false
 		for(const item of Array.isArray(files) ? files : []) {
 			const path = normalize(item && item.path)
@@ -130,6 +131,23 @@
 					FS.writeFile(fullPath, new Uint8Array(0))
 				}
 				vpkPlaceholders++
+				continue
+			}
+
+			// Loose retail files (cfg/, scripts/, resource/, maps/) need names
+			// in this shared namespace too: Source finds them by *listing*
+			// directories (the New Game dialog enumerates cfg/chapter*.cfg),
+			// and listings come from here. Opens and stats are intercepted by
+			// filesystem_stdio and served from the real File, so a zero-byte
+			// name costs nothing and never shadows the content.
+			if(/^(?:portal|hl2|platform)\/(?:cfg|scripts|resource|maps)\//i.test(path)) {
+				ensureParent(fullPath)
+				try {
+					FS.lookupPath(fullPath, { follow: false })
+				} catch(_) {
+					FS.writeFile(fullPath, new Uint8Array(0))
+				}
+				loosePlaceholders++
 			}
 		}
 
@@ -147,7 +165,7 @@
 		Module.render360Phase3StartupMemfsBytes = bytes
 		Module.render360Phase3StartupMemfsFiles = count
 		Module.render360Phase3VpkPlaceholders = vpkPlaceholders
-		Module.print?.(`[Render360 Phase 3] staged ${count} startup metadata files (${bytes} bytes) plus ${vpkPlaceholders} zero-byte VPK namespace placeholders; retail VPK payload remains browser-backed`)
+		Module.print?.(`[Render360 Phase 3] staged ${count} startup metadata files (${bytes} bytes) plus ${vpkPlaceholders} zero-byte VPK and ${loosePlaceholders} loose-file namespace placeholders; retail payload remains browser-backed`)
 		try { globalThis.render360SetPhase?.(`phase3-startup-metadata-ready:vpk=${vpkPlaceholders}`) } catch(_) {}
 	}
 

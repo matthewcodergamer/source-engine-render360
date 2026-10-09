@@ -26,7 +26,19 @@
     TAB: { key: 'Tab', code: 'Tab', keyCode: 9 },
     F6: { key: 'F6', code: 'F6', keyCode: 117 },
     F9: { key: 'F9', code: 'F9', keyCode: 120 },
+    UP: { key: 'ArrowUp', code: 'ArrowUp', keyCode: 38 },
+    DOWN: { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40 },
+    LEFT: { key: 'ArrowLeft', code: 'ArrowLeft', keyCode: 37 },
+    RIGHT: { key: 'ArrowRight', code: 'ArrowRight', keyCode: 39 },
   };
+
+  // Two mappings. "game" drives Portal; "menu" drives Source's menus and
+  // dialogs: the stick moves the selection, A/Start accept, B/Pause go back.
+  // The mode follows the game: menu on the background map and while paused,
+  // game once a real map loads.
+  const MENU_KEYS = { a: 'ENTER', start: 'ENTER', x: 'ENTER', b: 'ESC', y: null, back: 'ESC',
+    lb: 'LEFT', rb: 'RIGHT', lt: null, rt: null };
+  let mode = 'menu';
 
   // Portal's default bindings. Geometry is measured one-to-one from the
   // reference pad (iPhone 11 landscape, 896x350 CSS px below Safari's bar):
@@ -52,6 +64,10 @@
       font: 600 9px -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif; color: #e9eaee;
       -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
     body.r360-playing #r360c.r360c-on { display: block; }
+    #r360c { transition: opacity .45s ease; }
+    /* Fades out of the way when the screen is not being touched; any touch
+       brings it straight back (and still presses the button under it). */
+    #r360c.r360c-idle { opacity: .16; }
     /* Dark, faintly tinted glass with a hairline border, as in the reference;
        the fill is translucent so the game shows through. */
     #r360c button, #r360c-stick { pointer-events: auto; position: absolute; appearance: none; margin: 0; padding: 0;
@@ -63,8 +79,6 @@
     /* Face buttons are short pills (50x41), not circles or ellipses. */
     #r360c button.r360c-face { border-radius: 999px; }
     #r360c button.r360c-down { transform: scale(.94); background: rgba(var(--bd), .7); border-color: rgba(255,255,255,.55); }
-    #r360c.r360c-menu button:not([data-id="pause"]) { display: none; }
-    #r360c.r360c-menu #r360c-stick { display: none; }
     .r360c-gray  { --bg: 27,28,32;  --bd: 60,62,68; }
     .r360c-amber { --bg: 52,40,22;  --bd: 120,94,48; }
     .r360c-navy  { --bg: 18,26,40;  --bd: 44,60,86; }
@@ -161,22 +175,37 @@
       try { button.setPointerCapture(pointer); } catch (_) {}
       button.classList.add('r360c-down');
       if (spec.menuToggle) {
+        // Escape opens the pause menu in a level and backs out of menus.
         keyEvent('keydown', spec.key);
         keyEvent('keyup', spec.key);
         releaseAll();
-        root.classList.toggle('r360c-menu');
-      } else if (spec.key) {
+        if (inMap) setMode(mode === 'game' ? 'menu' : 'game');
+        return;
+      }
+      if (mode === 'menu') {
+        const name = MENU_KEYS[spec.id];
+        if (name) {
+          keyEvent('keydown', name);
+          keyEvent('keyup', name);
+          // Backing out of the pause menu returns to the game.
+          if (name === 'ESC' && inMap) setMode('game');
+        }
+        return;
+      }
+      if (spec.key) {
         press(spec.key);
       } else if (spec.mouse !== undefined) {
         mouseEvent('mousedown', spec.mouse);
       }
+      button.dataset.held = '1';
     };
     const up = (event) => {
       if (pointer === null || event.pointerId !== pointer) return;
       event.preventDefault();
       pointer = null;
       button.classList.remove('r360c-down');
-      if (spec.menuToggle) return;
+      if (button.dataset.held !== '1') return;
+      delete button.dataset.held;
       if (spec.key) release(spec.key);
       else if (spec.mouse !== undefined) mouseEvent('mouseup', spec.mouse);
     };
@@ -198,7 +227,32 @@
   let stickPointer = null;
   const stickKeys = new Set();
 
+  // Menu mode: one arrow press per direction change, then auto-repeat while
+  // the stick is held, like a console pad in a list.
+  let menuDir = null;
+  let menuTimer = 0;
+  function menuStep(dir) {
+    if (dir === menuDir) return;
+    menuDir = dir;
+    clearTimeout(menuTimer);
+    if (!dir) return;
+    const tap = () => { keyEvent('keydown', dir); keyEvent('keyup', dir); };
+    tap();
+    const repeat = () => { if (menuDir !== dir) return; tap(); menuTimer = setTimeout(repeat, 140); };
+    menuTimer = setTimeout(repeat, 380);
+  }
+
   function setStickKeys(next) {
+    if (mode === 'menu') {
+      let dir = null;
+      if (next.has('W')) dir = 'UP';
+      else if (next.has('S')) dir = 'DOWN';
+      else if (next.has('A')) dir = 'LEFT';
+      else if (next.has('D')) dir = 'RIGHT';
+      menuStep(dir);
+      return;
+    }
+    menuStep(null);
     for (const name of stickKeys) if (!next.has(name)) { stickKeys.delete(name); release(name); }
     for (const name of next) if (!stickKeys.has(name)) { stickKeys.add(name); press(name); }
   }
@@ -347,15 +401,26 @@
   }
 
   // ------------------------------------------------------------------ state
-  // Shown in a real map, hidden on the menu background map so menu taps reach
-  // the game. The in-game menu can also show or hide it.
+  // Visible by default on touch screens, on the menus too, so the menus can
+  // be driven with the stick and A. The ••• menu can hide or show it.
   let wanted = null;    // null = automatic, true/false = player's choice
   let inMap = false;
 
+  function setMode(next) {
+    if (mode === next) return;
+    releaseAll();
+    menuStep(null);
+    for (const name of Array.from(stickKeys)) { stickKeys.delete(name); }
+    mode = next;
+    root.dataset.mode = mode;
+    const label = stick.querySelector('.r360c-label');
+    if (label) label.textContent = mode === 'menu' ? 'Select' : 'Move';
+  }
+
   function apply() {
-    const on = wanted === null ? inMap : wanted;
+    const on = wanted === null ? true : wanted;
     root.classList.toggle('r360c-on', on);
-    if (!on) { releaseAll(); root.classList.remove('r360c-menu'); }
+    if (!on) { releaseAll(); menuStep(null); }
     const toggle = document.getElementById('r360-controller-row');
     if (toggle) toggle.textContent = on ? 'Hide controller' : 'Show controller';
   }
@@ -372,14 +437,34 @@
       /\bloaded\s+([A-Za-z0-9_]+)\.data\b/.exec(line);
     if (!match) return;
     inMap = !/^background/i.test(match[1]);
-    root.classList.remove('r360c-menu');
+    setMode(inMap ? 'game' : 'menu');
     apply();
   };
 
+  // Idle fade.
+  const IDLE_MS = 4000;
+  let idleTimer = 0;
+  function wake() {
+    root.classList.remove('r360c-idle');
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      // Never fade while a control is held.
+      if (stickPointer !== null || held.size) { wake(); return; }
+      root.classList.add('r360c-idle');
+    }, IDLE_MS);
+  }
+  for (const type of ['pointerdown', 'touchstart']) {
+    document.addEventListener(type, wake, { capture: true, passive: true });
+  }
+
   function mount() {
+    root.dataset.mode = mode;
+    const label = stick.querySelector('.r360c-label');
+    if (label) label.textContent = mode === 'menu' ? 'Select' : 'Move';
     document.body.appendChild(root);
     layout();
     apply();
+    wake();
   }
 
   window.addEventListener('resize', layout);
