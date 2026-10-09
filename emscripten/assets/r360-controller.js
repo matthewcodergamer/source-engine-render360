@@ -64,6 +64,10 @@
       font: 600 9px -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif; color: #e9eaee;
       -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
     body.r360-playing #r360c.r360c-on { display: block; }
+    #r360c { transition: opacity .45s ease; }
+    /* Fades out of the way when the screen is not being touched; any touch
+       brings it straight back (and still presses the button under it). */
+    #r360c.r360c-idle { opacity: .16; }
     /* Dark, faintly tinted glass with a hairline border, as in the reference;
        the fill is translucent so the game shows through. */
     #r360c button, #r360c-stick { pointer-events: auto; position: absolute; appearance: none; margin: 0; padding: 0;
@@ -437,6 +441,22 @@
     apply();
   };
 
+  // Idle fade.
+  const IDLE_MS = 4000;
+  let idleTimer = 0;
+  function wake() {
+    root.classList.remove('r360c-idle');
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      // Never fade while a control is held.
+      if (stickPointer !== null || held.size) { wake(); return; }
+      root.classList.add('r360c-idle');
+    }, IDLE_MS);
+  }
+  for (const type of ['pointerdown', 'touchstart']) {
+    document.addEventListener(type, wake, { capture: true, passive: true });
+  }
+
   function mount() {
     root.dataset.mode = mode;
     const label = stick.querySelector('.r360c-label');
@@ -444,6 +464,7 @@
     document.body.appendChild(root);
     layout();
     apply();
+    wake();
   }
 
   window.addEventListener('resize', layout);

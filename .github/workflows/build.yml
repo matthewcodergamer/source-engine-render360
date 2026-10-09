@@ -62,10 +62,8 @@ jobs:
             echo 'Render360 Portal: mimalloc returned to the iPhone release profile.' >&2
             exit 1
           fi
-          if grep -q -- '--profiling-funcs' emscripten/build.sh; then
-            echo 'Render360 Portal: profiling function names returned to the iPhone release build.' >&2
-            exit 1
-          fi
+          # --profiling-funcs is deliberately on while iPhone crashes are being
+          # traced: it is the only way Safari's Wasm stacks show function names.
           if grep -q 'link_libs=' emscripten/build.sh; then
             echo 'Render360 Portal: SIDE_MODULEs were returned to load-time linking; Source requires runtime dlopen.' >&2
             exit 1

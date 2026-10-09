@@ -95,13 +95,15 @@ let render360LogTailDirty = false
 function render360RememberLine(text) {
 	const line = String(text || '').trim()
 	if(!line) return
+	// Crash stacks are long and are the whole point; keep them intact.
+	const limit = line.startsWith('[Render360 worker stack]') ? 3000 : 300
 	if(RENDER360_NOTABLE_RE.test(line) && render360Notable.length < 60) {
 		const last = render360Notable[render360Notable.length - 1]
-		if(!last || !last.endsWith(line.slice(0, 300))) {
-			render360Notable.push(`${((Date.now() - render360Now) / 1000).toFixed(1)}s ${line.slice(0, 300)}`)
+		if(!last || !last.endsWith(line.slice(0, limit))) {
+			render360Notable.push(`${((Date.now() - render360Now) / 1000).toFixed(1)}s ${line.slice(0, limit)}`)
 		}
 	}
-	render360LogTail.push(`${((Date.now() - render360Now) / 1000).toFixed(1)}s ${line.slice(0, 300)}`)
+	render360LogTail.push(`${((Date.now() - render360Now) / 1000).toFixed(1)}s ${line.slice(0, limit)}`)
 	if(render360LogTail.length > RENDER360_LOG_TAIL_LINES) render360LogTail.splice(0, render360LogTail.length - RENDER360_LOG_TAIL_LINES)
 	render360LogTailDirty = true
 }
@@ -826,7 +828,9 @@ if(render360IsWindow && !render360ProbableProcessReload) {
 if(!render360IsWindow && typeof self !== 'undefined' && typeof self.addEventListener === 'function') {
 	self.addEventListener('error', event => {
 		const error = event?.error
-		const stack = String(error?.stack || '').split('\n').slice(0, 24).join(' | ')
+		const stack = String(error?.stack || '').split('\n').slice(0, 40)
+			.map(frame => frame.replace(/@\[wasm code\]$/, '').replace(/^(\d+)@wasm-function\[\1\]$/, 'f$1'))
+			.join(' | ')
 		render360Log(`[Render360 worker stack] ${error?.message || event?.message || 'error'} :: ${stack || '<no stack>'}`)
 	})
 }
