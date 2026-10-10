@@ -227,6 +227,7 @@
         <div class="r360-sep"></div>
         <span id="r360-fullscreen-row"><input type="button" class="r360-row" value="Fullscreen" onclick="render360OpenSheet(false); render360RequestFullscreen()"></span>
         <button type="button" class="r360-row" id="r360-controller-row" onclick="render360OpenSheet(false); window.render360ToggleController && render360ToggleController()">Show controller</button>
+        <button type="button" class="r360-row" id="r360-quality-row" onclick="render360CycleQuality()">Graphics: Standard</button>
         <button type="button" class="r360-row" onclick="render360CopyDiagnostics()">Copy diagnostics</button>
         <div id="render360_diagnostic_status">Shares the engine log with the developer</div>
         <div class="r360-sep"></div>
@@ -344,7 +345,30 @@
       }
 
       // ---------------------------------------------------------- menu
+      var RENDER360_QUALITY_NAMES = { standard: 'Standard', hd: 'HD', max: 'Max' };
+      var RENDER360_QUALITY_ORDER = ['standard', 'hd', 'max'];
+      function render360SavedQuality() {
+        var q = 'standard';
+        try { q = localStorage.getItem('render360Quality') || 'standard'; } catch (_) {}
+        return RENDER360_QUALITY_NAMES[q] ? q : 'standard';
+      }
+      function render360ShowQuality() {
+        var row = document.getElementById('r360-quality-row');
+        if (!row) return;
+        var saved = render360SavedQuality();
+        var running = (window.Module && Module.render360Quality) || saved;
+        row.textContent = 'Graphics: ' + RENDER360_QUALITY_NAMES[saved] +
+          (saved !== running ? ' (next launch)' : '');
+      }
+      // Resolution and texture size are fixed when the engine starts, so a new
+      // choice applies the next time Portal is opened.
+      function render360CycleQuality() {
+        var next = RENDER360_QUALITY_ORDER[(RENDER360_QUALITY_ORDER.indexOf(render360SavedQuality()) + 1) % RENDER360_QUALITY_ORDER.length];
+        try { localStorage.setItem('render360Quality', next); } catch (_) {}
+        render360ShowQuality();
+      }
       function render360OpenSheet(open) {
+        if (open) render360ShowQuality();
         document.getElementById('r360-sheet').classList.toggle('r360-open', !!open);
       }
 
@@ -410,7 +434,8 @@
           'OffscreenCanvas=' + typeof OffscreenCanvas,
           'WebGL2=' + String(!!document.createElement('canvas').getContext('webgl2')),
           'viewport=' + window.innerWidth + 'x' + window.innerHeight + '@' + (window.devicePixelRatio || 1) +
-            ' game=' + JSON.stringify((typeof Module !== 'undefined' && Module.render360GameSize) || null),
+            ' game=' + JSON.stringify((typeof Module !== 'undefined' && Module.render360GameSize) || null) +
+            ' quality=' + ((typeof Module !== 'undefined' && Module.render360Quality) || 'unknown'),
           '',
           '--- latest runtime event only ---',
           render360LatestOutput || '<none>'
@@ -555,6 +580,17 @@
         ' OffscreenCanvas=' + typeof OffscreenCanvas);
 
       if (!window.crossOriginIsolated || typeof SharedArrayBuffer === 'undefined') {
+        // Usually the start page's service worker wasn't in control yet (Safari
+        // right after a deploy). Reload the whole page once so it is; the time
+        // guard stops a loop where isolation is impossible (Private tabs).
+        var render360LastIsolationReload = 0;
+        try { render360LastIsolationReload = Number(sessionStorage.getItem('render360PagesReloadAt')) || 0; } catch (_) {}
+        if (Date.now() - render360LastIsolationReload > 20000) {
+          try { sessionStorage.setItem('render360PagesReloadAt', String(Date.now())); } catch (_) {}
+          render360AppendOutput('[Render360 baseline] not isolated; reloading the start page');
+          try { (window.top || window).location.reload(); } catch (_) { window.location.reload(); }
+          throw new Error('Render360: reloading for cross-origin isolation');
+        }
         render360ShowFailure('Portal can’t start here',
           'This page is not cross-origin isolated, so threads are unavailable. Open it from the Portal start page, not a Private tab.');
       }

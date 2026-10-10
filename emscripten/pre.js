@@ -307,6 +307,24 @@ Module['arguments'].push(
 // engine's own on-screen touch controls are the only way to move or look.
 // They default to off everywhere except Android. Window-only: this file also
 // runs inside every pthread worker.
+// Graphics quality, picked on the start page or in the in-game menu.
+// standard: 540p, quarter-size textures (the safe default for older phones)
+// hd: 720p, half-size textures
+// max: the screen's full resolution, full-size textures (uses the most memory)
+const RENDER360_QUALITY = {
+	standard: { phoneHeight: 540, desktopHeight: 720, picmip: 2 },
+	hd: { phoneHeight: 720, desktopHeight: 1080, picmip: 1 },
+	max: { phoneHeight: 4096, desktopHeight: 4096, picmip: 0 }
+}
+let render360Quality = 'standard'
+if(render360IsWindow) {
+	try {
+		const saved = localStorage.getItem('render360Quality')
+		if(saved && RENDER360_QUALITY[saved]) render360Quality = saved
+	} catch(_) {}
+	Module.render360Quality = render360Quality
+}
+
 if(render360IsWindow) {
 	let coarsePointer = false
 	try { coarsePointer = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches) } catch(_) {}
@@ -320,7 +338,7 @@ if(render360IsWindow) {
 		// Quarter-size textures. On a 6 inch screen the difference is hard to
 		// see, and textures are the largest thing a map load adds to both the
 		// Wasm heap and GPU memory, which is where iOS kills the page.
-		Module['arguments'].push('+mat_picmip', '2')
+		Module['arguments'].push('+mat_picmip', String(RENDER360_QUALITY[render360Quality].picmip))
 		// Cheaper rendering features for a phone GPU. Bump maps and specular
 		// stay on: turning them off makes Portal's materials ask for a
 		// $bumpmap texture that is not loaded (console errors).
@@ -348,7 +366,8 @@ if(render360IsWindow) {
 	} catch(_) {}
 	if(longSide > 0 && shortSide > 0) {
 		const dpr = Math.max(1, Number(window.devicePixelRatio || 1))
-		const height = Math.max(360, Math.min(phone ? 540 : 720, Math.round(shortSide * dpr)))
+		const quality = RENDER360_QUALITY[render360Quality]
+		const height = Math.max(360, Math.min(phone ? quality.phoneHeight : quality.desktopHeight, Math.round(shortSide * dpr)))
 		const width = Math.round(height * longSide / shortSide / 2) * 2
 		Module.render360GameSize = { width, height }
 		Module['arguments'].push('-w', String(width), '-h', String(height))

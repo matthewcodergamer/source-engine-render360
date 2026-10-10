@@ -56,6 +56,10 @@
     /* The old direct launch and the ZIP path stay wired for the script but out of sight. */
     #launch,#reload,label[for=ownershipFiles],#clearOwnership{display:none}
 
+    .quality{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;margin-top:14px;padding:4px;border-radius:14px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.08)}
+    .quality button{padding:9px 6px;border-radius:11px;font-size:14px;font-weight:600;color:var(--ink);background:transparent;box-shadow:none}
+    .quality button[aria-pressed=true]{color:#06121b;background:linear-gradient(180deg,#6fd0ff,var(--blue));box-shadow:0 4px 14px rgba(47,180,255,.3)}
+    #qualityHint{margin-top:6px;font-size:12.5px;color:var(--dim)}
     details{width:100%;color:var(--dim);font-size:13px}
     summary{list-style:none;cursor:pointer;text-align:center;padding:6px;font-size:13px;color:var(--dim)}
     summary::-webkit-details-marker{display:none}
@@ -103,6 +107,12 @@
       <div class="stepBody">
         <h2>Play</h2>
         <p>Turn your iPhone sideways. The game fills the screen.</p>
+        <div class="quality" role="group" aria-label="Graphics quality">
+          <button type="button" data-quality="standard">Standard</button>
+          <button type="button" data-quality="hd">HD</button>
+          <button type="button" data-quality="max">Max</button>
+        </div>
+        <p id="qualityHint"></p>
         <div class="actions">
           <button id="launch" type="button" disabled>Launch upstream baseline</button>
           <button id="reload" class="secondary" type="button">Reload isolation</button>
@@ -231,14 +241,37 @@
       await navigator.serviceWorker.ready;
       if(registration.waiting)registration.waiting.postMessage({type:'SKIP_WAITING'});
       set('sw',true,navigator.serviceWorker.controller?'controlling':'registered');
-      if(!navigator.serviceWorker.controller&&!sessionStorage.getItem('render360PagesReloaded')){
-        sessionStorage.setItem('render360PagesReloaded','1');
-        log('Service worker installed; reloading once for isolation.');
-        location.reload();
-        return new Promise(()=>{});
+      // The isolation headers only apply to pages the worker controls. After
+      // a deploy Safari can load the page before the new worker takes over,
+      // leaving it without SharedArrayBuffer, so reload whenever isolation is
+      // missing. The time guard stops a loop on browsers that can't isolate.
+      if(!navigator.serviceWorker.controller||!window.crossOriginIsolated){
+        let last=0;try{last=Number(sessionStorage.getItem('render360PagesReloadAt'))||0}catch(_){}
+        if(Date.now()-last>20000){
+          try{sessionStorage.setItem('render360PagesReloadAt',String(Date.now()))}catch(_){}
+          log('Service worker not isolating this page yet; reloading.');
+          location.reload();
+          return new Promise(()=>{});
+        }
       }
     }catch(error){set('sw',false,'registration failed');log('Service worker error:',error?.stack||String(error))}
   }
+
+  const QUALITY_HINTS={
+    standard:'540p, lighter textures. Smoothest, and safest on older iPhones.',
+    hd:'720p, sharper textures. Uses more memory and battery.',
+    max:'Full screen resolution and full textures. May run out of memory on older iPhones.'
+  };
+  function setupQuality(){
+    let current='standard';
+    try{current=localStorage.getItem('render360Quality')||'standard'}catch(_){}
+    if(!QUALITY_HINTS[current])current='standard';
+    const buttons=[...document.querySelectorAll('.quality button')];
+    const show=()=>{for(const b of buttons)b.setAttribute('aria-pressed',String(b.dataset.quality===current));$('qualityHint').textContent=QUALITY_HINTS[current]};
+    for(const b of buttons)b.addEventListener('click',()=>{current=b.dataset.quality;try{localStorage.setItem('render360Quality',current)}catch(_){}show()});
+    show();
+  }
+  setupQuality();
 
   function testSharedMemory(){
     try{const memory=new WebAssembly.Memory({initial:1,maximum:1,shared:true});return !!memory.buffer&&Object.prototype.toString.call(memory.buffer).includes('SharedArrayBuffer')}
