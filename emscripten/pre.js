@@ -176,6 +176,27 @@ if(render360IsWindow && render360CrashChannel) {
 			try { Module.printErr?.(String(event.data.text || '')) } catch(_) {}
 		}
 	})
+	// Frame watchdog: the render worker pings every ~2 s while it presents
+	// frames. A thread that hangs cannot log anything itself, so the page
+	// notes when the pings stop (and when they come back).
+	let lastFramePing = 0, lastFrameCount = 0, stallReported = false
+	render360CrashChannel.addEventListener('message', event => {
+		if(event?.data?.type !== 'render360-frame' || event.data.launchId !== render360LaunchId) return
+		const now = performance.now()
+		if(stallReported) {
+			try { Module.printErr?.(`[Render360 GL] frames resumed after ${((now - lastFramePing) / 1000).toFixed(0)} s at frame ${event.data.frames}`) } catch(_) {}
+			stallReported = false
+		}
+		lastFramePing = now
+		lastFrameCount = event.data.frames
+	})
+	setInterval(() => {
+		if(!lastFramePing || stallReported) return
+		const gap = performance.now() - lastFramePing
+		if(gap < 8000 || document.hidden) return
+		stallReported = true
+		try { Module.printErr?.(`[Render360 GL] stalled: no frame for ${(gap / 1000).toFixed(0)} s after frame ${lastFrameCount} (phase ${render360CrashState.phase})`) } catch(_) {}
+	}, 2000)
 	render360CrashChannel.addEventListener('message', event => {
 		const incoming = event?.data?.type === 'render360-crash-state' ? event.data.state : null
 		if(!incoming || incoming.launchId !== render360LaunchId) return
@@ -860,7 +881,7 @@ if(!render360IsWindow && typeof WebGL2RenderingContext !== 'undefined') (() => {
 	const FACTORS = { 0: '0', 1: '1', 0x300: 'sc', 0x301: '1-sc', 0x302: 'sa', 0x303: '1-sa', 0x304: 'da', 0x305: '1-da', 0x306: 'dc', 0x307: '1-dc', 0x308: 'sat' }
 	const factor = f => FACTORS[f] ?? Number(f).toString(16)
 	let frame = null
-	const resetFrame = () => { frame = { draws: 0, blendDraws: 0, noDepthTest: 0, noDepthWrite: 0, noColor: 0, funcs: {}, clears: [], fbSwitches: 0, uploads: 0 } }
+	const resetFrame = () => { frame = { draws: 0, blendDraws: 0, noDepthTest: 0, noDepthWrite: 0, noColor: 0, funcs: {}, clears: [], fbSwitches: 0, uploads: 0, readbacks: 0, readbackBytes: 0, start: performance.now() } }
 	resetFrame()
 	let frames = 0, reports = 0
 	const REPORT_AT = new Set([5, 30, 120, 300, 600])
@@ -945,6 +966,12 @@ if(!render360IsWindow && typeof WebGL2RenderingContext !== 'undefined') (() => {
 		render360Log(`[Render360 GL] texImage2D ${w}x${h} ifmt 0x${Number(internalformat).toString(16)} fmt 0x${Number(format).toString(16)}: ${sampleTexels(w, h, format, type, data, offset)}`)
 	})
 
+	// GPU buffer read-backs stall Safari until the GPU catches up; count them.
+	wrap('getBufferSubData', (target, offset, dst, dstOffset, length) => {
+		frame.readbacks++
+		frame.readbackBytes += Number(length) || 0
+	})
+
 	// Error hunt: during a few frames, check glGetError after every call and
 	// name the calls WebGL rejects (diagnostics show a GL error every frame).
 	let hunting = false
@@ -969,7 +996,11 @@ if(!render360IsWindow && typeof WebGL2RenderingContext !== 'undefined') (() => {
 				try { e = getError.call(this) } catch(_) {}
 				if(e && huntFound.size < 12) {
 					const key = name + ':' + e
-					if(!huntFound.has(key)) huntFound.set(key, `${name}(${args.slice(0, 7).map(fmtArg).join(', ')}) -> 0x${e.toString(16)}`)
+					let status = ''
+					if(e === 0x506) {
+						try { status = ' fbstatus 0x' + this.checkFramebufferStatus(0x8CA9).toString(16) + '/0x' + this.checkFramebufferStatus(0x8CA8).toString(16) } catch(_) {}
+					}
+					if(!huntFound.has(key)) huntFound.set(key, `${name}(${args.slice(0, 7).map(fmtArg).join(', ')}) -> 0x${e.toString(16)}${status}`)
 				}
 				return result
 			}
@@ -985,7 +1016,7 @@ if(!render360IsWindow && typeof WebGL2RenderingContext !== 'undefined') (() => {
 
 	// Heartbeat: a line every ~10 s while frames are being presented, so a
 	// freeze shows up as the time the lines stop.
-	let lastBeat = 0, beatFrames = 0, beats = 0
+	let lastBeat = 0, beatFrames = 0, beats = 0, slowFrames = 0, lastPing = 0
 
 	wrap('blitFramebuffer', function() {
 		if(S.drawFb) return
@@ -1000,11 +1031,20 @@ if(!render360IsWindow && typeof WebGL2RenderingContext !== 'undefined') (() => {
 			}
 		}
 		const now = performance.now()
+		if(now - lastPing > 2000) {
+			lastPing = now
+			try { render360CrashChannel?.postMessage({ type: 'render360-frame', launchId: render360LaunchId, frames }) } catch(_) {}
+		}
+		const frameMs = now - frame.start
+		if(frameMs > 1500 && slowFrames < 15) {
+			slowFrames++
+			render360Log(`[Render360 GL] slow frame ${frames}: ${(frameMs / 1000).toFixed(1)} s, ${frame.draws} draws, ${frame.uploads} uploads, ${frame.readbacks} buffer read-backs (${Math.round(frame.readbackBytes / 1024)} KiB)`)
+		}
 		if(!lastBeat) { lastBeat = now; beatFrames = frames }
 		else if(now - lastBeat > 10000 && beats < 60) {
 			beats++
 			const fps = (frames - beatFrames) * 1000 / (now - lastBeat)
-			render360Log(`[Render360 GL] alive: frame ${frames}, ${fps.toFixed(1)} fps, ${frame.draws} draws, ${frame.uploads} uploads this frame`)
+			render360Log(`[Render360 GL] alive: frame ${frames}, ${fps.toFixed(1)} fps, ${frame.draws} draws, ${frame.uploads} uploads, ${frame.readbacks} read-backs this frame`)
 			lastBeat = now; beatFrames = frames
 		}
 		if(REPORT_AT.has(frames) || (frames > 600 && frames % 900 === 0 && reports < 20)) {

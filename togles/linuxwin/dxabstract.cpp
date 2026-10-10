@@ -1407,8 +1407,19 @@ HRESULT IDirect3D9::CheckDeviceFormat(UINT Adapter,D3DDEVTYPE DeviceType,D3DFORM
 													legalUsage	|=	D3DUSAGE_QUERY_SRGBREAD;
 						break;
 												
-						case D3DFMT_X8R8G8B8:		legalUsage	=	D3DUSAGE_DYNAMIC | D3DUSAGE_AUTOGENMIPMAP | D3DUSAGE_QUERY_FILTER;
+						case D3DFMT_X8R8G8B8:
+#ifdef __EMSCRIPTEN__
+													// X8R8G8B8 is 4-byte BGRX data in a 3-channel GL_RGB8 texture;
+													// WebGL rejects that pairing (INVALID_OPERATION), so every such
+													// texture -- normal maps, the engine's 1x1 white/grey/black
+													// fallbacks -- had no image and sampled black. Report it
+													// unsupported so the material system converts those images to
+													// R8G8B8 (plain RGB, which WebGL accepts) when it loads them.
+													legalUsage	=	0;
+#else
+													legalUsage	=	D3DUSAGE_DYNAMIC | D3DUSAGE_AUTOGENMIPMAP | D3DUSAGE_QUERY_FILTER;
 													legalUsage	|=	D3DUSAGE_QUERY_SRGBREAD | D3DUSAGE_QUERY_SRGBWRITE;
+#endif
 						break;
 
 							// one and two channel textures... we'll have to fake these as four channel tex if we want to support them

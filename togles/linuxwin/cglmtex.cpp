@@ -3347,6 +3347,11 @@ void convert_texture( GLenum &internalformat, GLsizei width, GLsizei height, GLe
 	if( internalformat == GL_SRGB8 && format == GL_RGBA )
 		internalformat = GL_SRGB8_ALPHA8;
 
+	// A 3-channel internal format with 4-channel data is invalid in GLES 3 /
+	// WebGL 2 (the texture gets no image at all), so promote it.
+	if( internalformat == GL_RGB8 && format == GL_RGBA )
+		internalformat = GL_RGBA8;
+
 	if( format == GL_LUMINANCE || format == GL_LUMINANCE_ALPHA )
 		internalformat = format;
 
