@@ -89,7 +89,7 @@ const render360LogTail = []
 // Errors and font/audio lines, kept apart so a long run cannot push them out
 // of the 40-line tail before anyone copies diagnostics.
 const RENDER360_NOTABLE_KEY = 'render360-ios-notable-v1'
-const RENDER360_NOTABLE_RE = /font|error|fail|couldn'?t|cannot|can't|unable|missing|not found|warning|audio|sound|Render360 video/i
+const RENDER360_NOTABLE_RE = /font|error|fail|couldn'?t|cannot|can't|unable|missing|not found|warning|audio|sound|Render360 video|Render360 GL/i
 const render360Notable = []
 let render360LogTailDirty = false
 function render360RememberLine(text) {
@@ -97,7 +97,7 @@ function render360RememberLine(text) {
 	if(!line) return
 	// Crash stacks are long and are the whole point; keep them intact.
 	const limit = line.startsWith('[Render360 worker stack]') ? 3000 : 300
-	if(RENDER360_NOTABLE_RE.test(line) && render360Notable.length < 60) {
+	if(RENDER360_NOTABLE_RE.test(line) && render360Notable.length < 90) {
 		const last = render360Notable[render360Notable.length - 1]
 		if(!last || !last.endsWith(line.slice(0, limit))) {
 			render360Notable.push(`${((Date.now() - render360Now) / 1000).toFixed(1)}s ${line.slice(0, limit)}`)
@@ -300,7 +300,10 @@ Module['arguments'].push(
 	'+volume', '0.7',
 	// Paint further ahead than the desktop 0.1 s: phone frames are slower,
 	// and the ring holds 0.37 s.
-	'+snd_mixahead', '0.25'
+	'+snd_mixahead', '0.25',
+	// Clear the colour buffer at the start of every view, so nothing from an
+	// earlier frame can survive into the next one (the in-game trails).
+	'+gl_clear', '1'
 )
 
 // A phone has no keyboard and iOS has never shipped Pointer Lock, so the
@@ -839,6 +842,82 @@ if(render360IsWindow && !render360ProbableProcessReload) {
 			return ctx
 		}
 	}
+})()
+
+// GL probe. In-game frames have shown trails and saturated colours that a
+// still frame (menu, pause) does not, and the cause can only be seen on the
+// phone. This records, per presented frame, what the engine actually asks
+// WebGL to do -- clears (and the scissor/mask state they run under), how many
+// draws blend and with which factors, draws without depth test or depth
+// writes, GL errors -- and writes a short summary line into the diagnostics
+// now and then. State is shadowed from the calls themselves, so it costs a
+// few property writes per call and no GPU queries (getError once per report).
+if(!render360IsWindow && typeof WebGL2RenderingContext !== 'undefined') (() => {
+	const P = WebGL2RenderingContext.prototype
+	const S = { blend: false, depthTest: false, scissor: false, depthMask: true, colorMask: 'rgba', blend2: '1/0', drawFb: null, viewport: '' }
+	const BLEND = 0x0BE2, DEPTH_TEST = 0x0B71, SCISSOR_TEST = 0x0C11
+	const FB = 0x8D40, DRAW_FB = 0x8CA9
+	const FACTORS = { 0: '0', 1: '1', 0x300: 'sc', 0x301: '1-sc', 0x302: 'sa', 0x303: '1-sa', 0x304: 'da', 0x305: '1-da', 0x306: 'dc', 0x307: '1-dc', 0x308: 'sat' }
+	const factor = f => FACTORS[f] ?? Number(f).toString(16)
+	let frame = null
+	const resetFrame = () => { frame = { draws: 0, blendDraws: 0, noDepthTest: 0, noDepthWrite: 0, noColor: 0, funcs: {}, clears: [], fbSwitches: 0 } }
+	resetFrame()
+	let frames = 0, reports = 0
+	const REPORT_AT = new Set([5, 30, 120, 300, 600])
+	const wrap = (name, before) => {
+		const original = P[name]
+		if(typeof original !== 'function') return
+		P[name] = function(...args) {
+			try { before.apply(this, args) } catch(_) {}
+			return original.apply(this, args)
+		}
+	}
+	const setCap = (cap, on) => {
+		if(cap === BLEND) S.blend = on
+		else if(cap === DEPTH_TEST) S.depthTest = on
+		else if(cap === SCISSOR_TEST) S.scissor = on
+	}
+	wrap('enable', cap => setCap(cap, true))
+	wrap('disable', cap => setCap(cap, false))
+	wrap('depthMask', on => { S.depthMask = !!on })
+	wrap('colorMask', (r, g, b, a) => { S.colorMask = ((r ? 'r' : '') + (g ? 'g' : '') + (b ? 'b' : '') + (a ? 'a' : '')) || 'none' })
+	wrap('blendFunc', (src, dst) => { S.blend2 = factor(src) + '/' + factor(dst) })
+	wrap('blendFuncSeparate', (src, dst, srcA, dstA) => { S.blend2 = factor(src) + '/' + factor(dst) + (srcA !== src || dstA !== dst ? ',' + factor(srcA) + '/' + factor(dstA) : '') })
+	wrap('viewport', (x, y, w, h) => { S.viewport = w + 'x' + h })
+	wrap('bindFramebuffer', (target, fb) => {
+		if(target !== FB && target !== DRAW_FB) return
+		if(fb !== S.drawFb) frame.fbSwitches++
+		S.drawFb = fb
+	})
+	wrap('clear', mask => {
+		if(frame.clears.length >= 10) return
+		const bits = (mask & 0x4000 ? 'C' : '') + (mask & 0x100 ? 'Z' : '') + (mask & 0x400 ? 'S' : '')
+		frame.clears.push(bits + (S.scissor ? '(scissor)' : '') + (S.depthMask ? '' : '(nozwrite)') +
+			(S.colorMask !== 'rgba' ? '(mask:' + S.colorMask + ')' : '') + (S.drawFb ? '' : '@screen') + '@' + S.viewport)
+	})
+	const onDraw = () => {
+		frame.draws++
+		if(S.blend) { frame.blendDraws++; frame.funcs[S.blend2] = (frame.funcs[S.blend2] || 0) + 1 }
+		if(!S.depthTest) frame.noDepthTest++
+		if(!S.depthMask) frame.noDepthWrite++
+		if(S.colorMask === 'none') frame.noColor++
+	}
+	for(const name of ['drawElements', 'drawArrays', 'drawRangeElements', 'drawElementsInstanced', 'drawArraysInstanced']) wrap(name, onDraw)
+	wrap('blitFramebuffer', function() {
+		if(S.drawFb) return
+		// A blit to the canvas is ToGL presenting a frame.
+		frames++
+		if(REPORT_AT.has(frames) || (frames > 600 && frames % 900 === 0 && reports < 20)) {
+			reports++
+			let err = 0
+			try { err = this.getError() } catch(_) {}
+			const funcs = Object.entries(frame.funcs).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([k, v]) => k + ' x' + v).join(', ')
+			render360Log(`[Render360 GL] frame ${frames}: draws ${frame.draws}, blended ${frame.blendDraws} [${funcs}], ` +
+				`no-depth-test ${frame.noDepthTest}, no-depth-write ${frame.noDepthWrite}, no-color ${frame.noColor}, ` +
+				`fb-switches ${frame.fbSwitches}, clears ${frame.clears.join(' ') || 'none'}, glError 0x${err.toString(16)}`)
+		}
+		resetFrame()
+	})
 })()
 
 // A Worker's uncaught error reaches the page only as "Pthread 0x... sent an
