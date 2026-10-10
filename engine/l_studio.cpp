@@ -104,7 +104,16 @@ ConVar r_proplightingfromdisk( "r_proplightingfromdisk", "1", FCVAR_CHEAT, "0=Of
 #endif
 static ConVar r_itemblinkmax( "r_itemblinkmax", ".3", FCVAR_CHEAT );
 static ConVar r_itemblinkrate( "r_itemblinkrate", "4.5", FCVAR_CHEAT );
+#ifdef __EMSCRIPTEN__
+// The pooled allocator locks only the first N vertices of the shared buffer
+// and then writes each prop's colors at a byte offset past that range. That
+// relies on D3D handing out a pointer to the whole buffer; the browser GL
+// layer stages exactly the locked range, so those writes landed outside it.
+// Give every static prop its own color mesh instead.
+static ConVar r_proplightingpooling( "r_proplightingpooling", "0", FCVAR_CHEAT, "0 - off, 1 - static prop color meshes are allocated from a single shared vertex buffer (on hardware that supports stream offset)" );
+#else
 static ConVar r_proplightingpooling( "r_proplightingpooling", "-1.0", FCVAR_CHEAT, "0 - off, 1 - static prop color meshes are allocated from a single shared vertex buffer (on hardware that supports stream offset)" );
+#endif
 
 //-----------------------------------------------------------------------------
 // StudioRender config 
