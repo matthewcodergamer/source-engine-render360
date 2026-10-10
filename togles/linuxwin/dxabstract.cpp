@@ -5636,7 +5636,9 @@ HRESULT IDirect3DDevice9::DrawIndexedPrimitive( D3DPRIMITIVETYPE Type,INT BaseVe
 
 	this->FlushIndexBindings( );
 	this->FlushVertexBindings( BaseVertexIndex );
-	m_ctx->FlushDrawStates( MinVertexIndex, MinVertexIndex + NumVertices - 1, 0 );
+	// FlushDrawStates builds the GL vertex attribs from the bound streams, and
+	// on the web it applies BaseVertexIndex to them (see glmgr_flush.inl).
+	m_ctx->FlushDrawStates( MinVertexIndex, MinVertexIndex + NumVertices - 1, BaseVertexIndex );
 
 	if (gl.m_FogEnable)
 	{

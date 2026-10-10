@@ -1512,6 +1512,7 @@ class GLMContext
 			IDirect3DVertexDeclaration9	*m_pVertDecl;
 			D3DStreamDesc m_streams[ D3D_MAX_STREAMS ];
 			uint64 m_vtxAttribMap[2];
+			uint m_nBaseVertex;		// browser build: base vertex baked into the attrib pointers
 		};
 
 		CurAttribs_t m_CurAttribs;
@@ -1523,6 +1524,7 @@ class GLMContext
 			memset( m_CurAttribs.m_streams, 0, sizeof( m_CurAttribs.m_streams ) );
 			m_CurAttribs.m_vtxAttribMap[0] = 0xBBBBBBBBBBBBBBBBULL;
 			m_CurAttribs.m_vtxAttribMap[1] = 0xBBBBBBBBBBBBBBBBULL;
+			m_CurAttribs.m_nBaseVertex = 0xFFFFFFFF;
 		}
 		
 		FORCEINLINE void ReleasedShader() {	NullProgram(); }
