@@ -89,7 +89,7 @@ const render360LogTail = []
 // Errors and font/audio lines, kept apart so a long run cannot push them out
 // of the 40-line tail before anyone copies diagnostics.
 const RENDER360_NOTABLE_KEY = 'render360-ios-notable-v1'
-const RENDER360_NOTABLE_RE = /font|error|fail|couldn'?t|cannot|can't|unable|missing|not found|warning|audio|sound/i
+const RENDER360_NOTABLE_RE = /font|error|fail|couldn'?t|cannot|can't|unable|missing|not found|warning|audio|sound|Render360 video/i
 const render360Notable = []
 let render360LogTailDirty = false
 function render360RememberLine(text) {
