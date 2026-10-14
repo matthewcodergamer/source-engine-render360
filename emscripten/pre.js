@@ -1012,6 +1012,40 @@ if(!render360IsWindow && typeof WebGL2RenderingContext !== 'undefined') (() => {
 		huntOriginals.clear()
 		hunting = false
 	}
+	// Profile windows: count WebGL calls by name and time spent inside them,
+	// to tell a GPU/driver-bound frame from one where the engine's own code
+	// (or a blocking read) eats the time.
+	const profOriginals = new Map()
+	let profCounts = null, profGlMs = 0, profStart = 0
+	const startProfile = () => {
+		profCounts = new Map(); profGlMs = 0; profStart = performance.now()
+		for(const name of Object.getOwnPropertyNames(P)) {
+			if(name === 'constructor') continue
+			const desc = Object.getOwnPropertyDescriptor(P, name)
+			if(!desc || typeof desc.value !== 'function') continue
+			const original = desc.value
+			profOriginals.set(name, original)
+			P[name] = function(...args) {
+				const t0 = performance.now()
+				const result = original.apply(this, args)
+				const dt = performance.now() - t0
+				profGlMs += dt
+				const c = profCounts.get(name)
+				if(c) { c.n++; c.ms += dt } else profCounts.set(name, { n: 1, ms: dt })
+				return result
+			}
+		}
+	}
+	const stopProfile = (label) => {
+		for(const [name, original] of profOriginals) P[name] = original
+		profOriginals.clear()
+		const wall = performance.now() - profStart
+		const top = [...profCounts.entries()].sort((a, b) => b[1].ms - a[1].ms).slice(0, 8)
+			.map(([k, v]) => `${k} x${v.n} ${v.ms.toFixed(0)}ms`).join(', ')
+		render360Log(`[Render360 GL] profile ${label}: ${(wall / 1000).toFixed(1)} s wall, ${(profGlMs / 1000).toFixed(1)} s inside WebGL; top: ${top}`)
+		profCounts = null
+	}
+	const PROFILE_WINDOWS = [[11, 13], [60, 63], [240, 243]]
 	const HUNT_WINDOWS = [[6, 8], [200, 203], [450, 453]]
 
 	// Heartbeat: a line every ~10 s while frames are being presented, so a
@@ -1022,6 +1056,10 @@ if(!render360IsWindow && typeof WebGL2RenderingContext !== 'undefined') (() => {
 		if(S.drawFb) return
 		// A blit to the canvas is ToGL presenting a frame.
 		frames++
+		for(const [start, end] of PROFILE_WINDOWS) {
+			if(frames === start && !profCounts && !hunting) startProfile()
+			if(frames === end && profCounts) stopProfile(`frames ${start}-${end}`)
+		}
 		for(const [start, end] of HUNT_WINDOWS) {
 			if(frames === start && !hunting) { try { getError.call(this) } catch(_) {} startHunt() }
 			if(frames === end && hunting) {
@@ -1039,6 +1077,7 @@ if(!render360IsWindow && typeof WebGL2RenderingContext !== 'undefined') (() => {
 		if(frameMs > 1500 && slowFrames < 15) {
 			slowFrames++
 			render360Log(`[Render360 GL] slow frame ${frames}: ${(frameMs / 1000).toFixed(1)} s, ${frame.draws} draws, ${frame.uploads} uploads, ${frame.readbacks} buffer read-backs (${Math.round(frame.readbackBytes / 1024)} KiB)`)
+			if(profCounts) stopProfile(`through slow frame ${frames}`)
 		}
 		if(!lastBeat) { lastBeat = now; beatFrames = frames }
 		else if(now - lastBeat > 10000 && beats < 60) {

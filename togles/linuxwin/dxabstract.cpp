@@ -3184,6 +3184,36 @@ HRESULT IDirect3DDevice9::CreateRenderTarget(UINT Width,UINT Height,D3DFORMAT Fo
 	return result;
 }
 
+#ifdef __EMSCRIPTEN__
+// WebGL 2 keeps WebGL 1's rule that every attachment of a framebuffer has the
+// same size (FRAMEBUFFER_INCOMPLETE_DIMENSIONS, 0x8CD9), which desktop GL 3 and
+// D3D9 dropped. Source renders into smaller targets (bloom, reflections,
+// portal views) with the full-screen depth buffer still bound; every clear and
+// draw into those framebuffers failed. Such a pass only ever touches the
+// top-left of the big depth buffer and clears depth itself, so give it a
+// private depth buffer of the colour target's size instead (one per size).
+static CGLMTex *WebMatchingDepthTex( IDirect3DDevice9 *pDevice, IDirect3DSurface9 *pDepth, uint nWidth, uint nHeight )
+{
+	struct WebDepthEntry_t { uint m_nWidth, m_nHeight; D3DFORMAT m_format; IDirect3DSurface9 *m_pSurface; };
+	static CUtlVector< WebDepthEntry_t > s_entries;
+
+	for ( int i = 0; i < s_entries.Count(); i++ )
+	{
+		const WebDepthEntry_t &entry = s_entries[i];
+		if ( entry.m_nWidth == nWidth && entry.m_nHeight == nHeight && entry.m_format == pDepth->m_desc.Format )
+			return entry.m_pSurface->m_tex;
+	}
+
+	IDirect3DSurface9 *pSurface = NULL;
+	if ( pDevice->CreateDepthStencilSurface( nWidth, nHeight, pDepth->m_desc.Format, D3DMULTISAMPLE_NONE, 0, FALSE, &pSurface, NULL ) != S_OK || !pSurface )
+		return NULL;
+
+	WebDepthEntry_t entry = { nWidth, nHeight, pDepth->m_desc.Format, pSurface };
+	s_entries.AddToTail( entry );
+	return pSurface->m_tex;
+}
+#endif
+
 void IDirect3DDevice9::UpdateBoundFBO()
 {
 	RenderTargetState_t renderTargetState;
@@ -3231,6 +3261,28 @@ void IDirect3DDevice9::UpdateBoundFBO()
 			memset( &depthParams, 0, sizeof(depthParams) );
 
 			depthParams.m_tex = m_pDepthStencil->m_tex;
+
+#ifdef __EMSCRIPTEN__
+			for ( uint i = 0; i < 4; i++ )
+			{
+				if ( !m_pRenderTargets[i] )
+					continue;
+
+				const GLMTexLayoutKey &colorKey = m_pRenderTargets[i]->m_tex->m_layout->m_key;
+				const uint nMip = m_pRenderTargets[i]->m_mip;
+				const uint nWidth = MAX( 1u, (uint)colorKey.m_xSize >> nMip );
+				const uint nHeight = MAX( 1u, (uint)colorKey.m_ySize >> nMip );
+				const GLMTexLayoutKey &depthKey = depthParams.m_tex->m_layout->m_key;
+
+				if ( ( nWidth != (uint)depthKey.m_xSize || nHeight != (uint)depthKey.m_ySize ) && !m_pDepthStencil->m_desc.MultiSampleType )
+				{
+					CGLMTex *pMatching = WebMatchingDepthTex( this, m_pDepthStencil, nWidth, nHeight );
+					if ( pMatching )
+						depthParams.m_tex = pMatching;
+				}
+				break;
+			}
+#endif
 
 			EGLMFBOAttachment destAttach = (depthParams.m_tex->m_layout->m_format->m_glDataFormat != 34041) ? kAttDepth : kAttDepthStencil;
 
