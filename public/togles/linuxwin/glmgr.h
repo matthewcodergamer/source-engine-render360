@@ -736,7 +736,11 @@ FORCEINLINE void GLContextSet( GLBlendEnableSRGB_t *src )
 //	GLint encoding = 0;
 //	gGL->glGetFramebufferAttachmentParameteriv( GL_DRAW_FRAMEBUFFER_EXT, GL_COLOR_ATTACHMENT0, GL_FRAMEBUFFER_ATTACHMENT_COLOR_ENCODING, &encoding );
 
+#ifndef __EMSCRIPTEN__
+	// WebGL has no GL_FRAMEBUFFER_SRGB switch (INVALID_ENUM every frame); the
+	// browser build does the sRGB write in the pixel shader instead.
 	glSetEnable( GL_FRAMEBUFFER_SRGB_EXT, src->enable != 0 );
+#endif
 }
 
 FORCEINLINE void GLContextGet( GLBlendEnableSRGB_t *dst )

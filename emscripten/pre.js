@@ -176,6 +176,27 @@ if(render360IsWindow && render360CrashChannel) {
 			try { Module.printErr?.(String(event.data.text || '')) } catch(_) {}
 		}
 	})
+	// Frame watchdog: the render worker pings every ~2 s while it presents
+	// frames. A thread that hangs cannot log anything itself, so the page
+	// notes when the pings stop (and when they come back).
+	let lastFramePing = 0, lastFrameCount = 0, stallReported = false
+	render360CrashChannel.addEventListener('message', event => {
+		if(event?.data?.type !== 'render360-frame' || event.data.launchId !== render360LaunchId) return
+		const now = performance.now()
+		if(stallReported) {
+			try { Module.printErr?.(`[Render360 GL] frames resumed after ${((now - lastFramePing) / 1000).toFixed(0)} s at frame ${event.data.frames}`) } catch(_) {}
+			stallReported = false
+		}
+		lastFramePing = now
+		lastFrameCount = event.data.frames
+	})
+	setInterval(() => {
+		if(!lastFramePing || stallReported) return
+		const gap = performance.now() - lastFramePing
+		if(gap < 8000 || document.hidden) return
+		stallReported = true
+		try { Module.printErr?.(`[Render360 GL] stalled: no frame for ${(gap / 1000).toFixed(0)} s after frame ${lastFrameCount} (phase ${render360CrashState.phase})`) } catch(_) {}
+	}, 2000)
 	render360CrashChannel.addEventListener('message', event => {
 		const incoming = event?.data?.type === 'render360-crash-state' ? event.data.state : null
 		if(!incoming || incoming.launchId !== render360LaunchId) return
@@ -860,7 +881,7 @@ if(!render360IsWindow && typeof WebGL2RenderingContext !== 'undefined') (() => {
 	const FACTORS = { 0: '0', 1: '1', 0x300: 'sc', 0x301: '1-sc', 0x302: 'sa', 0x303: '1-sa', 0x304: 'da', 0x305: '1-da', 0x306: 'dc', 0x307: '1-dc', 0x308: 'sat' }
 	const factor = f => FACTORS[f] ?? Number(f).toString(16)
 	let frame = null
-	const resetFrame = () => { frame = { draws: 0, blendDraws: 0, noDepthTest: 0, noDepthWrite: 0, noColor: 0, funcs: {}, clears: [], fbSwitches: 0 } }
+	const resetFrame = () => { frame = { draws: 0, blendDraws: 0, noDepthTest: 0, noDepthWrite: 0, noColor: 0, funcs: {}, clears: [], fbSwitches: 0, uploads: 0, readbacks: 0, readbackBytes: 0, start: performance.now() } }
 	resetFrame()
 	let frames = 0, reports = 0
 	const REPORT_AT = new Set([5, 30, 120, 300, 600])
@@ -903,10 +924,168 @@ if(!render360IsWindow && typeof WebGL2RenderingContext !== 'undefined') (() => {
 		if(S.colorMask === 'none') frame.noColor++
 	}
 	for(const name of ['drawElements', 'drawArrays', 'drawRangeElements', 'drawElementsInstanced', 'drawArraysInstanced']) wrap(name, onDraw)
+	// Texture uploads: lit surfaces render black, so check whether the texel
+	// data that reaches WebGL is actually filled in (lightmap pages are
+	// updated with texSubImage2D). Logs the first few uploads with a sample of
+	// their bytes.
+	const U = { rowLength: 0, skipPixels: 0, skipRows: 0 }
+	wrap('pixelStorei', (pname, value) => {
+		if(pname === 0x0CF2) U.rowLength = value
+		else if(pname === 0x0CF4) U.skipPixels = value
+		else if(pname === 0x0CF3) U.skipRows = value
+	})
+	const BYTES_PER_TEXEL = { 0x1908: 4, 0x1907: 3, 0x1909: 1, 0x190A: 2, 0x1903: 1, 0x8227: 2 }
+	const sampleTexels = (w, h, format, type, data, offset) => {
+		if(!data || typeof data !== 'object' || type !== 0x1401) return 'no-data'
+		const bpp = BYTES_PER_TEXEL[format]
+		if(!bpp) return 'fmt 0x' + format.toString(16)
+		const rowBytes = (U.rowLength || w) * bpp
+		const base = (offset || 0) + U.skipRows * rowBytes + U.skipPixels * bpp
+		const rows = Math.min(h, 16), cols = Math.min(w * bpp, 512)
+		let sum = 0, n = 0, nonzero = 0
+		for(let y = 0; y < rows; y++) {
+			const row = base + Math.floor(y * h / rows) * rowBytes
+			for(let x = 0; x < cols; x++) {
+				const v = data[row + x] | 0
+				sum += v; n++; if(v) nonzero++
+			}
+		}
+		return n ? `mean ${Math.round(sum / n)} nonzero ${Math.round(100 * nonzero / n)}%` : 'empty'
+	}
+	let subUploadLogs = 0, imageUploadLogs = 0
+	wrap('texSubImage2D', (target, level, x, y, w, h, format, type, data, offset) => {
+		frame.uploads++
+		if(subUploadLogs >= 10 || w * h < 64) return
+		subUploadLogs++
+		render360Log(`[Render360 GL] texSubImage2D ${w}x${h} at ${x},${y} level ${level} fmt 0x${Number(format).toString(16)} rowLength ${U.rowLength}: ${sampleTexels(w, h, format, type, data, offset)}`)
+	})
+	wrap('texImage2D', (target, level, internalformat, w, h, border, format, type, data, offset) => {
+		frame.uploads++
+		if(imageUploadLogs >= 8 || level !== 0 || w < 128 || h < 128 || typeof w !== 'number') return
+		imageUploadLogs++
+		render360Log(`[Render360 GL] texImage2D ${w}x${h} ifmt 0x${Number(internalformat).toString(16)} fmt 0x${Number(format).toString(16)}: ${sampleTexels(w, h, format, type, data, offset)}`)
+	})
+
+	// GPU buffer read-backs stall Safari until the GPU catches up; count them.
+	wrap('getBufferSubData', (target, offset, dst, dstOffset, length) => {
+		frame.readbacks++
+		frame.readbackBytes += Number(length) || 0
+	})
+
+	// Error hunt: during a few frames, check glGetError after every call and
+	// name the calls WebGL rejects (diagnostics show a GL error every frame).
+	let hunting = false
+	const huntFound = new Map()
+	const fmtArg = a => typeof a === 'number'
+		? (Number.isInteger(a) && a > 255 ? '0x' + a.toString(16) : String(a))
+		: (a === null ? 'null' : (a?.constructor?.name || typeof a))
+	const getError = P.getError
+	const huntOriginals = new Map()
+	// Wrappers go on only for the hunt window and come off after, so normal
+	// frames pay nothing for them.
+	const startHunt = () => {
+		for(const name of Object.getOwnPropertyNames(P)) {
+			if(name === 'getError' || name === 'constructor' || name === 'isContextLost') continue
+			const desc = Object.getOwnPropertyDescriptor(P, name)
+			if(!desc || typeof desc.value !== 'function') continue
+			const original = desc.value
+			huntOriginals.set(name, original)
+			P[name] = function(...args) {
+				const result = original.apply(this, args)
+				let e = 0
+				try { e = getError.call(this) } catch(_) {}
+				if(e && huntFound.size < 12) {
+					const key = name + ':' + e
+					let status = ''
+					if(e === 0x506) {
+						try { status = ' fbstatus 0x' + this.checkFramebufferStatus(0x8CA9).toString(16) + '/0x' + this.checkFramebufferStatus(0x8CA8).toString(16) } catch(_) {}
+					}
+					if(!huntFound.has(key)) huntFound.set(key, `${name}(${args.slice(0, 7).map(fmtArg).join(', ')}) -> 0x${e.toString(16)}${status}`)
+				}
+				return result
+			}
+		}
+		hunting = true
+	}
+	const stopHunt = () => {
+		for(const [name, original] of huntOriginals) P[name] = original
+		huntOriginals.clear()
+		hunting = false
+	}
+	// Profile windows: count WebGL calls by name and time spent inside them,
+	// to tell a GPU/driver-bound frame from one where the engine's own code
+	// (or a blocking read) eats the time.
+	const profOriginals = new Map()
+	let profCounts = null, profGlMs = 0, profStart = 0
+	const startProfile = () => {
+		profCounts = new Map(); profGlMs = 0; profStart = performance.now()
+		for(const name of Object.getOwnPropertyNames(P)) {
+			if(name === 'constructor') continue
+			const desc = Object.getOwnPropertyDescriptor(P, name)
+			if(!desc || typeof desc.value !== 'function') continue
+			const original = desc.value
+			profOriginals.set(name, original)
+			P[name] = function(...args) {
+				const t0 = performance.now()
+				const result = original.apply(this, args)
+				const dt = performance.now() - t0
+				profGlMs += dt
+				const c = profCounts.get(name)
+				if(c) { c.n++; c.ms += dt } else profCounts.set(name, { n: 1, ms: dt })
+				return result
+			}
+		}
+	}
+	const stopProfile = (label) => {
+		for(const [name, original] of profOriginals) P[name] = original
+		profOriginals.clear()
+		const wall = performance.now() - profStart
+		const top = [...profCounts.entries()].sort((a, b) => b[1].ms - a[1].ms).slice(0, 8)
+			.map(([k, v]) => `${k} x${v.n} ${v.ms.toFixed(0)}ms`).join(', ')
+		render360Log(`[Render360 GL] profile ${label}: ${(wall / 1000).toFixed(1)} s wall, ${(profGlMs / 1000).toFixed(1)} s inside WebGL; top: ${top}`)
+		profCounts = null
+	}
+	const PROFILE_WINDOWS = [[11, 13], [60, 63], [240, 243]]
+	const HUNT_WINDOWS = [[6, 8], [200, 203], [450, 453]]
+
+	// Heartbeat: a line every ~10 s while frames are being presented, so a
+	// freeze shows up as the time the lines stop.
+	let lastBeat = 0, beatFrames = 0, beats = 0, slowFrames = 0, lastPing = 0
+
 	wrap('blitFramebuffer', function() {
 		if(S.drawFb) return
 		// A blit to the canvas is ToGL presenting a frame.
 		frames++
+		for(const [start, end] of PROFILE_WINDOWS) {
+			if(frames === start && !profCounts && !hunting) startProfile()
+			if(frames === end && profCounts) stopProfile(`frames ${start}-${end}`)
+		}
+		for(const [start, end] of HUNT_WINDOWS) {
+			if(frames === start && !hunting) { try { getError.call(this) } catch(_) {} startHunt() }
+			if(frames === end && hunting) {
+				stopHunt()
+				render360Log(`[Render360 GL] error hunt frames ${start}-${end}: ${[...huntFound.values()].join(' | ') || 'no GL errors'}`)
+				huntFound.clear()
+			}
+		}
+		const now = performance.now()
+		if(now - lastPing > 2000) {
+			lastPing = now
+			try { render360CrashChannel?.postMessage({ type: 'render360-frame', launchId: render360LaunchId, frames }) } catch(_) {}
+		}
+		const frameMs = now - frame.start
+		if(frameMs > 1500 && slowFrames < 15) {
+			slowFrames++
+			render360Log(`[Render360 GL] slow frame ${frames}: ${(frameMs / 1000).toFixed(1)} s, ${frame.draws} draws, ${frame.uploads} uploads, ${frame.readbacks} buffer read-backs (${Math.round(frame.readbackBytes / 1024)} KiB)`)
+			if(profCounts) stopProfile(`through slow frame ${frames}`)
+		}
+		if(!lastBeat) { lastBeat = now; beatFrames = frames }
+		else if(now - lastBeat > 10000 && beats < 60) {
+			beats++
+			const fps = (frames - beatFrames) * 1000 / (now - lastBeat)
+			render360Log(`[Render360 GL] alive: frame ${frames}, ${fps.toFixed(1)} fps, ${frame.draws} draws, ${frame.uploads} uploads, ${frame.readbacks} read-backs this frame`)
+			lastBeat = now; beatFrames = frames
+		}
 		if(REPORT_AT.has(frames) || (frames > 600 && frames % 900 === 0 && reports < 20)) {
 			reports++
 			let err = 0
